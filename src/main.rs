@@ -1,3 +1,4 @@
+mod code;
 mod sched;
 mod task;
 mod worker;
