@@ -13,13 +13,64 @@ pub struct Value {
     addr: SpaceAddr,
 }
 
+impl Default for Value {
+    fn default() -> Self {
+        Self {
+            type_id: TypeId::VACANT,
+            addr: SpaceAddr::MAX,
+        }
+    }
+}
+
+pub struct Unit;
+
+pub struct Closure {
+    block: *const Block,
+    captured: [Value; 16],
+}
+
+impl Closure {
+    pub fn new(block: &Block, captured_values: impl ExactSizeIterator<Item = Value>) -> Self {
+        assert!(
+            block.num_captured <= 16,
+            "capture more than 16 values is not supported"
+        );
+        assert_eq!(captured_values.len(), block.num_captured);
+        let mut captured = [Value::default(); 16];
+        for (dst, src) in captured.iter_mut().zip(captured_values) {
+            *dst = src
+        }
+        Self { block, captured }
+    }
+
+    pub fn main(instrs: Vec<Instr>, num_value: usize) -> Self {
+        let block = Box::new(Block {
+            instrs,
+            num_param: 0,
+            num_captured: 0,
+            num_value,
+        });
+        Self {
+            block: Box::into_raw(block),
+            captured: Default::default(),
+        }
+    }
+
+    pub unsafe fn drop_main(self) {
+        // SAFETY: `block` is created by `Box::into_raw`, so it must be valid.
+        drop(unsafe { Box::from_raw(self.block as *mut Block) });
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct TypeId(u16);
 
 impl TypeId {
-    const STRING: Self = Self(1);
-    const CLOSURE: Self = Self(2);
-    const FUTURE: Self = Self(3);
+    pub const VACANT: Self = Self(0);
+    pub const UNIT: Self = Self(1);
+    pub const STRING: Self = Self(2);
+    pub const CLOSURE: Self = Self(3);
+    pub const FUTURE: Self = Self(4);
 }
 
 #[derive(Error, Debug)]
@@ -29,17 +80,12 @@ pub struct TypeError {
     pub actual: TypeId,
 }
 
-pub struct Closure {
-    block: Arc<Block>,
-    captured: Vec<Value>,
-}
-
 pub struct Eval {
     frames: Vec<Frame>,
 }
 
 struct Frame {
-    block: Arc<Block>,
+    block: *const Block,
     instr_pointer: InstrIndex,
     call_dst: Option<usize>,
     values: Vec<Value>,
@@ -64,17 +110,23 @@ pub struct ArityError {
 
 impl Eval {
     fn push_frame(&mut self, closure: &Closure, args: &[Value]) -> Result<(), ArityError> {
-        if args.len() != closure.block.num_param {
+        let block = unsafe { &*closure.block };
+        if args.len() != block.num_param {
             return Err(ArityError {
-                expected: closure.block.num_param,
+                expected: block.num_param,
                 actual: args.len(),
             });
         }
+        let mut values = vec![Value::default(); block.num_value];
+        assert!(values.len() >= block.num_captured + args.len());
+        for (dst, src) in values.iter_mut().zip(closure.captured.iter().chain(args)) {
+            *dst = *src
+        }
         self.frames.push(Frame {
-            block: closure.block.clone(),
+            block,
             instr_pointer: 0,
             call_dst: None,
-            values: [&closure.captured, args].concat(),
+            values,
         });
         Ok(())
     }
@@ -95,9 +147,9 @@ pub enum ExecuteError {
 
 impl Eval {
     pub fn execute(&mut self, space: &mut Space) -> Result<ExecuteStatus, ExecuteError> {
-        loop {
+        'nonlocal: loop {
             let frame = self.frames.last_mut().expect("last frame exists");
-            for instr in &frame.block.instrs[frame.instr_pointer..] {
+            for instr in &unsafe { &*frame.block }.instrs[frame.instr_pointer..] {
                 frame.instr_pointer += 1;
                 match instr {
                     Instr::Call(dst, closure, args) => {
@@ -111,30 +163,32 @@ impl Eval {
                         // borrow to `self` ends here
                         let closure = closure_value.get_closure(space)?;
                         self.push_frame(closure, &arg_values)?;
-                        break;
+                        continue 'nonlocal;
                     }
                     Instr::Return(index) => {
                         let return_value = frame.values[*index];
                         // borrow to `self` ends here
                         self.frames.pop();
                         let Some(frame) = self.frames.last_mut() else {
-                            // TODO assert returning Unit
-                            return Ok(ExecuteStatus::Exited);
+                            return_value.load_unit()?; // should we make a dedicated error variant?
+                            break 'nonlocal Ok(ExecuteStatus::Exited);
                         };
                         let dst = frame.call_dst.take().expect("call destination must be set");
                         frame.values[dst] = return_value;
-                        break;
+                        continue 'nonlocal;
                     }
                     Instr::Jump(_, jump_cond) => todo!(),
+
+                    Instr::LoadUnit(dst) => frame.values[*dst] = Value::unit(),
                     Instr::LoadString(_, _) => {}
-                    Instr::LoadClosure(dst, block, items) => {
-                        let block = block.clone();
-                        let captured = items.iter().map(|item| frame.values[*item]).collect();
+                    Instr::LoadClosure(dst, block, captured) => {
+                        let closure =
+                            Closure::new(block, captured.iter().map(|&index| frame.values[index]));
                         let mut closure_value = Value {
                             type_id: TypeId::CLOSURE,
                             addr: space.alloc::<Closure>(),
                         };
-                        closure_value.write_closure(Closure { block, captured }, space)?;
+                        closure_value.store_closure(closure, space)?;
                         frame.values[*dst] = closure_value
                     }
                     Instr::Copy(dst, src) => {
@@ -166,12 +220,24 @@ impl Value {
         Ok(())
     }
 
+    fn unit() -> Self {
+        Self {
+            type_id: TypeId::UNIT,
+            addr: SpaceAddr::MAX,
+        }
+    }
+
+    fn load_unit(&self) -> Result<Unit, TypeError> {
+        self.ensure_type(TypeId::UNIT)?;
+        Ok(Unit)
+    }
+
     fn get_closure<'a>(&'a self, space: &'a Space) -> Result<&'a Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
         Ok(unsafe { space.get(self.addr) })
     }
 
-    fn write_closure(&mut self, closure: Closure, space: &mut Space) -> Result<(), TypeError> {
+    fn store_closure(&mut self, closure: Closure, space: &mut Space) -> Result<(), TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
         unsafe { space.write(self.addr, closure) };
         Ok(())

@@ -5,6 +5,7 @@ dictionaries: []
 words:
   - Deque
   - instrs
+  - miri
   - Sched
   - thiserror
 ignoreWords: []

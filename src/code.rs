@@ -23,6 +23,7 @@ pub enum Expr {
 }
 
 pub enum Literal {
+    Unit,
     String(String),
     Func(Func),
 }
@@ -45,6 +46,7 @@ pub type InstrIndex = usize;
 pub type ValueIndex = usize;
 
 pub enum Instr {
+    LoadUnit(ValueIndex),
     LoadString(ValueIndex, String),
     LoadClosure(ValueIndex, Arc<Block>, Vec<ValueIndex>), // destination, block, captured values
 
@@ -67,5 +69,6 @@ pub struct JumpCond {
 pub struct Block {
     pub num_captured: usize,
     pub num_param: usize,
+    pub num_value: usize,
     pub instrs: Vec<Instr>,
 }
