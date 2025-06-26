@@ -24,10 +24,6 @@ impl Space {
         addr
     }
 
-    pub fn typed_alloc<T>(&mut self) -> SpaceAddr {
-        self.alloc(size_of::<T>(), align_of::<T>())
-    }
-
     pub fn get(&self, addr: SpaceAddr, size: usize) -> &[u8] {
         assert!(addr + size <= self.alloc_addr);
         &self.buf[addr..addr + size]
@@ -38,6 +34,13 @@ impl Space {
         &mut self.buf[addr..addr + size]
     }
 
+    pub fn typed_alloc<T>(&mut self) -> SpaceAddr {
+        self.alloc(size_of::<T>(), align_of::<T>())
+    }
+
+    /// # Safety
+    /// The caller must ensure `addr` contains a `T` instance, e.g., was 
+    /// `typed_alloc::<T>`ed
     pub unsafe fn typed_get<T>(&self, addr: SpaceAddr) -> &T {
         let addr = self.get(addr, size_of::<T>()).as_ptr().cast::<T>();
         assert!(addr.is_aligned());

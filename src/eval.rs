@@ -1,3 +1,5 @@
+use std::str;
+
 use thiserror::Error;
 
 use crate::{
@@ -31,10 +33,10 @@ impl Default for Value {
     }
 }
 
-pub struct Unit;
+struct Unit;
 
-pub struct String {
-    buf: Value,
+struct String {
+    buf: SpaceAddr,
     len: usize,
 }
 
@@ -188,7 +190,9 @@ impl Eval {
                     Instr::Jump(_, Some(_)) => todo!(),
 
                     Instr::LoadUnit(dst) => frame.values[*dst] = Value::unit(),
-                    Instr::LoadString(_, _) => {}
+                    Instr::LoadString(dst, literal) => {
+                        frame.values[*dst] = Value::alloc_string(literal, space)
+                    }
                     Instr::LoadClosure(dst, block, captured) => {
                         let closure =
                             Closure::new(block, captured.iter().map(|&index| frame.values[index]));
@@ -245,6 +249,24 @@ impl Value {
     fn load_unit(&self) -> Result<Unit, TypeError> {
         self.ensure_type(TypeId::UNIT)?;
         Ok(Unit)
+    }
+
+    fn alloc_string(literal: &str, space: &mut Space) -> Self {
+        let len = literal.len();
+        let addr = space.typed_alloc::<String>();
+        let buf = space.alloc(len, 1);
+        space.get_mut(buf, len).copy_from_slice(literal.as_bytes());
+        unsafe { space.typed_write(addr, String { buf, len }) }
+        Self {
+            type_id: TypeId::STRING,
+            addr,
+        }
+    }
+
+    fn get_str<'a>(&'a self, space: &'a Space) -> Result<&'a str, TypeError> {
+        self.ensure_type(TypeId::STRING)?;
+        let string = unsafe { space.typed_get::<String>(self.addr) };
+        Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
     fn get_closure<'a>(&'a self, space: &'a Space) -> Result<&'a Closure, TypeError> {
