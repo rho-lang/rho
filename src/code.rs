@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 pub enum Stmt {
     Expr(Expr),
     Assign(String, Expr),
-    While(Expr, Expr),
+    Loop(Expr),
     Break,
     Continue,
     Return(Expr),
@@ -37,4 +39,33 @@ pub struct Match {
 pub struct Func {
     pub params: Vec<String>,
     pub body: Box<Expr>,
+}
+
+pub type InstrIndex = usize;
+pub type ValueIndex = usize;
+
+pub enum Instr {
+    LoadString(ValueIndex, String),
+    LoadClosure(ValueIndex, Arc<Block>, Vec<ValueIndex>), // destination, block, captured values
+
+    Copy(ValueIndex, ValueIndex),
+    Call(ValueIndex, ValueIndex, Vec<ValueIndex>), // destination, closure, arguments
+    Jump(InstrIndex, Option<JumpCond>),
+    Return(ValueIndex),
+
+    Spawn(ValueIndex),
+    LoadFuture(ValueIndex),
+    Wait(ValueIndex, ValueIndex),
+    Notify(ValueIndex),
+}
+
+pub struct JumpCond {
+    pub actual: ValueIndex,
+    pub expected: ValueIndex,
+}
+
+pub struct Block {
+    pub num_captured: usize,
+    pub num_param: usize,
+    pub instrs: Vec<Instr>,
 }
