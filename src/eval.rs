@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     code::{Block, Instr, InstrIndex},
-    sched::Sched,
+    sched::{NotifyToken, Sched},
     space::{Space, SpaceAddr},
     task::Task,
 };
@@ -81,6 +81,9 @@ impl Closure {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Future(NotifyToken);
+
 pub struct Eval {
     frames: Vec<Frame>,
 }
@@ -134,7 +137,7 @@ impl Eval {
 }
 
 pub enum ExecuteStatus {
-    Blocking,
+    Waiting(NotifyToken),
     Exited,
 }
 
@@ -217,16 +220,22 @@ impl Eval {
                         let src_value = frame.values[*src];
                         frame.values[*dst] = src_value
                     }
-                    Instr::Spawn(index) => {
-                        let closure = frame.values[*index].get_closure(space)?;
+                    Instr::Spawn(closure) => {
+                        let closure = frame.values[*closure].get_closure(space)?;
                         sched.spawn(Task::new(closure)?);
                     }
-                    Instr::LoadFuture(_) => todo!(),
-                    Instr::Wait(_, _) => {
-                        // TODO
-                        return Ok(ExecuteStatus::Blocking);
+                    Instr::LoadFuture(dst) => {
+                        let future = Future(sched.alloc_notify_token());
+                        frame.values[*dst] = Value::alloc_future(future, space)
                     }
-                    Instr::Notify(_) => todo!(),
+                    Instr::Wait(future) => {
+                        let Future(notify_token) = frame.values[*future].load_future(space)?;
+                        return Ok(ExecuteStatus::Waiting(notify_token));
+                    }
+                    Instr::Notify(future) => {
+                        let Future(notify_token) = frame.values[*future].load_future(space)?;
+                        sched.notify(notify_token)
+                    }
                 }
             }
             unreachable!("block should terminate with Return")
@@ -291,6 +300,20 @@ impl Value {
         self.ensure_type(TypeId::CLOSURE)?;
         unsafe { space.typed_write(self.addr, closure) };
         Ok(())
+    }
+
+    fn alloc_future(future: Future, space: &mut Space) -> Self {
+        let addr = space.typed_alloc::<Future>();
+        unsafe { space.typed_write(addr, future) };
+        Self {
+            type_id: TypeId::FUTURE,
+            addr,
+        }
+    }
+
+    fn load_future(&self, space: &Space) -> Result<Future, TypeError> {
+        self.ensure_type(TypeId::FUTURE)?;
+        Ok(*unsafe { space.typed_get(self.addr) })
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::{
     eval::{Closure, Eval, ExecuteError, ExecuteStatus},
-    sched::Sched,
+    sched::{NotifyToken, Sched},
     space::Space,
 };
 
@@ -9,7 +9,7 @@ pub struct Task {
 }
 
 pub enum RunStatus {
-    Blocking,
+    Waiting(NotifyToken),
     Exited,
 }
 
@@ -21,7 +21,7 @@ impl Task {
 
     pub fn run(&mut self, space: &mut Space, sched: &mut Sched) -> Result<RunStatus, ExecuteError> {
         let status = match self.eval.execute(space, sched)? {
-            ExecuteStatus::Blocking => RunStatus::Blocking,
+            ExecuteStatus::Waiting(notify_token) => RunStatus::Waiting(notify_token),
             ExecuteStatus::Exited => RunStatus::Exited,
         };
         Ok(status)

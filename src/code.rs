@@ -63,7 +63,7 @@ pub enum Instr {
 
     Spawn(ValueIndex),
     LoadFuture(ValueIndex),
-    Wait(ValueIndex, ValueIndex),
+    Wait(ValueIndex),
     Notify(ValueIndex),
 
     Intrinsic(Intrinsic, Vec<ValueIndex>),

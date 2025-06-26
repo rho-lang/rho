@@ -20,7 +20,7 @@ pub fn run(main_closure: &Closure) {
             Ok(RunStatus::Exited) => {
                 tasks.remove(&task_id);
             }
-            Ok(RunStatus::Blocking) => {}
+            Ok(RunStatus::Waiting(notify_token)) => sched.block(task_id, notify_token),
             Err(err) => {
                 tracing::error!("task {task_id} error: {err}");
                 tasks.remove(&task_id);
