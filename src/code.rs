@@ -45,6 +45,7 @@ pub struct Func {
 pub type InstrIndex = usize;
 pub type ValueIndex = usize;
 
+#[derive(Debug)]
 pub enum Instr {
     LoadUnit(ValueIndex),
     LoadString(ValueIndex, String),
@@ -61,12 +62,15 @@ pub enum Instr {
     Notify(ValueIndex),
 }
 
+#[derive(Debug)]
 pub struct JumpCond {
     pub actual: ValueIndex,
     pub expected: ValueIndex,
 }
 
+#[derive(Debug)]
 pub struct Block {
+    pub name: String,
     pub num_captured: usize,
     pub num_param: usize,
     pub num_value: usize,

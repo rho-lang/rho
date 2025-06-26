@@ -14,7 +14,10 @@ use crate::{
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt::init();
+
     let simple = Block {
+        name: "simple".into(),
         instrs: vec![Instr::LoadUnit(0), Instr::Return(0)],
         num_param: 0,
         num_captured: 0,

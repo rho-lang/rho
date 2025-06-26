@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use thiserror::Error;
 
 use crate::{
@@ -45,6 +43,7 @@ impl Closure {
 
     pub fn main(instrs: Vec<Instr>, num_value: usize) -> Self {
         let block = Box::new(Block {
+            name: "<main>".into(),
             instrs,
             num_param: 0,
             num_captured: 0,
@@ -149,7 +148,9 @@ impl Eval {
     pub fn execute(&mut self, space: &mut Space) -> Result<ExecuteStatus, ExecuteError> {
         'nonlocal: loop {
             let frame = self.frames.last_mut().expect("last frame exists");
+            let name = unsafe { &(*frame.block).name };
             for instr in &unsafe { &*frame.block }.instrs[frame.instr_pointer..] {
+                tracing::trace!(%frame.instr_pointer, %name, ?instr, "execute");
                 frame.instr_pointer += 1;
                 match instr {
                     Instr::Call(dst, closure, args) => {
