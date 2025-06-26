@@ -1,5 +1,10 @@
 use std::sync::Arc;
 
+use crate::{
+    eval::{Eval, TypeError, Value},
+    space::Space,
+};
+
 pub enum Stmt {
     Expr(Expr),
     Assign(String, Expr),
@@ -60,7 +65,12 @@ pub enum Instr {
     LoadFuture(ValueIndex),
     Wait(ValueIndex, ValueIndex),
     Notify(ValueIndex),
+
+    Intrinsic(Intrinsic, Vec<ValueIndex>),
 }
+
+// currently not seen any intrinsic that need to be `unsafe`
+pub type Intrinsic = fn(&mut [Value], &[ValueIndex], &mut Space) -> Result<(), TypeError>;
 
 #[derive(Debug)]
 pub struct JumpCond {

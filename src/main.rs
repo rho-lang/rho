@@ -9,7 +9,7 @@ use std::{error::Error, sync::Arc};
 
 use crate::{
     code::{Block, Instr},
-    eval::{Closure, Eval},
+    eval::{Closure, Eval, intrinsics},
     space::Space,
 };
 
@@ -18,7 +18,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let simple = Block {
         name: "simple".into(),
-        instrs: vec![Instr::LoadUnit(0), Instr::Return(0)],
+        instrs: vec![
+            Instr::LoadString(0, "hello".into()),
+            Instr::Intrinsic(intrinsics::trace, vec![0]),
+            Instr::LoadUnit(0),
+            Instr::Return(0),
+        ],
         num_param: 0,
         num_captured: 0,
         num_value: 1,

@@ -189,6 +189,10 @@ impl Eval {
                     }
                     Instr::Jump(_, Some(_)) => todo!(),
 
+                    Instr::Intrinsic(intrinsic, indexes) => {
+                        intrinsic(&mut frame.values, indexes, space)?
+                    }
+
                     Instr::LoadUnit(dst) => frame.values[*dst] = Value::unit(),
                     Instr::LoadString(dst, literal) => {
                         frame.values[*dst] = Value::alloc_string(literal, space)
@@ -277,6 +281,24 @@ impl Value {
     fn store_closure(&mut self, closure: Closure, space: &mut Space) -> Result<(), TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
         unsafe { space.typed_write(self.addr, closure) };
+        Ok(())
+    }
+}
+
+pub mod intrinsics {
+    use crate::{
+        code::ValueIndex,
+        eval::{TypeError, Value},
+        space::Space,
+    };
+
+    pub fn trace(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        space: &mut Space,
+    ) -> Result<(), TypeError> {
+        let message = values[indexes[0]].get_str(space)?;
+        tracing::info!(message);
         Ok(())
     }
 }
