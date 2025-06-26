@@ -6,6 +6,7 @@ use crate::{
     code::{Block, Instr, InstrIndex},
     sched::Sched,
     space::{Space, SpaceAddr},
+    task::Task,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -216,7 +217,10 @@ impl Eval {
                         let src_value = frame.values[*src];
                         frame.values[*dst] = src_value
                     }
-                    Instr::Spawn(_) => todo!(),
+                    Instr::Spawn(index) => {
+                        let closure = frame.values[*index].get_closure(space)?;
+                        sched.spawn(Task::new(closure)?);
+                    }
                     Instr::LoadFuture(_) => todo!(),
                     Instr::Wait(_, _) => {
                         // TODO
