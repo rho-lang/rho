@@ -6,6 +6,7 @@ words:
   - Deque
   - instrs
   - miri
+  - reborrow
   - Sched
   - thiserror
 ignoreWords: []

@@ -11,6 +11,17 @@ pub struct Value {
     addr: SpaceAddr,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct TypeId(u8);
+
+impl TypeId {
+    pub const VACANT: Self = Self(0);
+    pub const UNIT: Self = Self(1);
+    pub const STRING: Self = Self(2);
+    pub const CLOSURE: Self = Self(3);
+    pub const FUTURE: Self = Self(4);
+}
+
 impl Default for Value {
     fn default() -> Self {
         Self {
@@ -31,7 +42,7 @@ impl Closure {
     pub fn new(block: &Block, captured_values: impl ExactSizeIterator<Item = Value>) -> Self {
         assert!(
             block.num_captured <= 16,
-            "capture more than 16 values is not supported"
+            "capturing more than 16 values is not supported"
         );
         assert_eq!(captured_values.len(), block.num_captured);
         let mut captured = [Value::default(); 16];
@@ -59,24 +70,6 @@ impl Closure {
         // SAFETY: `block` is created by `Box::into_raw`, so it must be valid.
         drop(unsafe { Box::from_raw(self.block as *mut Block) });
     }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TypeId(u16);
-
-impl TypeId {
-    pub const VACANT: Self = Self(0);
-    pub const UNIT: Self = Self(1);
-    pub const STRING: Self = Self(2);
-    pub const CLOSURE: Self = Self(3);
-    pub const FUTURE: Self = Self(4);
-}
-
-#[derive(Error, Debug)]
-#[error("type error: expected {expected:?}, actual {actual:?}")]
-pub struct TypeError {
-    pub expected: TypeId,
-    pub actual: TypeId,
 }
 
 pub struct Eval {
@@ -146,9 +139,10 @@ pub enum ExecuteError {
 
 impl Eval {
     pub fn execute(&mut self, space: &mut Space) -> Result<ExecuteStatus, ExecuteError> {
-        'nonlocal: loop {
-            let frame = self.frames.last_mut().expect("last frame exists");
+        let mut frame = self.frames.last_mut().expect("last frame exists");
+        'control: loop {
             let name = unsafe { &(*frame.block).name };
+            // optimize for sequentially execute instructions
             for instr in &unsafe { &*frame.block }.instrs[frame.instr_pointer..] {
                 tracing::trace!(%frame.instr_pointer, %name, ?instr, "execute");
                 frame.instr_pointer += 1;
@@ -161,24 +155,32 @@ impl Eval {
                             .collect::<Vec<_>>();
                         let replaced = frame.call_dst.replace(*dst);
                         assert!(replaced.is_none());
-                        // borrow to `self` ends here
+                        // borrow to `self` via `frame` ends here
                         let closure = closure_value.get_closure(space)?;
                         self.push_frame(closure, &arg_values)?;
-                        continue 'nonlocal;
+                        // reborrow
+                        frame = self.frames.last_mut().expect("last frame exists");
+                        continue 'control;
                     }
                     Instr::Return(index) => {
                         let return_value = frame.values[*index];
-                        // borrow to `self` ends here
+                        // borrow to `self` via `frame` ends here
                         self.frames.pop();
-                        let Some(frame) = self.frames.last_mut() else {
+                        let Some(last_frame) = self.frames.last_mut() else {
                             return_value.load_unit()?; // should we make a dedicated error variant?
-                            break 'nonlocal Ok(ExecuteStatus::Exited);
+                            break 'control Ok(ExecuteStatus::Exited);
                         };
+                        // reborrow
+                        frame = last_frame;
                         let dst = frame.call_dst.take().expect("call destination must be set");
                         frame.values[dst] = return_value;
-                        continue 'nonlocal;
+                        continue 'control;
                     }
-                    Instr::Jump(_, jump_cond) => todo!(),
+                    Instr::Jump(instr_index, None) => {
+                        frame.instr_pointer = *instr_index;
+                        continue 'control;
+                    }
+                    Instr::Jump(_, Some(_)) => todo!(),
 
                     Instr::LoadUnit(dst) => frame.values[*dst] = Value::unit(),
                     Instr::LoadString(_, _) => {}
@@ -208,6 +210,13 @@ impl Eval {
             unreachable!("block should terminate with Return")
         }
     }
+}
+
+#[derive(Error, Debug)]
+#[error("type error: expected {expected:?}, actual {actual:?}")]
+pub struct TypeError {
+    pub expected: TypeId,
+    pub actual: TypeId,
 }
 
 impl Value {
