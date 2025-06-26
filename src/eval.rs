@@ -33,6 +33,11 @@ impl Default for Value {
 
 pub struct Unit;
 
+pub struct String {
+    buf: Value,
+    len: usize,
+}
+
 pub struct Closure {
     block: *const Block,
     captured: [Value; 16],
@@ -189,7 +194,7 @@ impl Eval {
                             Closure::new(block, captured.iter().map(|&index| frame.values[index]));
                         let mut closure_value = Value {
                             type_id: TypeId::CLOSURE,
-                            addr: space.alloc::<Closure>(),
+                            addr: space.typed_alloc::<Closure>(),
                         };
                         closure_value.store_closure(closure, space)?;
                         frame.values[*dst] = closure_value
@@ -244,12 +249,12 @@ impl Value {
 
     fn get_closure<'a>(&'a self, space: &'a Space) -> Result<&'a Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(unsafe { space.get(self.addr) })
+        Ok(unsafe { space.typed_get(self.addr) })
     }
 
     fn store_closure(&mut self, closure: Closure, space: &mut Space) -> Result<(), TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        unsafe { space.write(self.addr, closure) };
+        unsafe { space.typed_write(self.addr, closure) };
         Ok(())
     }
 }

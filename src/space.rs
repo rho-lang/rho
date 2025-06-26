@@ -14,26 +14,38 @@ impl Space {
         }
     }
 
-    pub fn alloc<T: Sized>(&mut self) -> SpaceAddr {
-        let addr = self.alloc_addr
-            + unsafe { self.buf.as_ptr().add(self.alloc_addr) }.align_offset(align_of::<T>());
-        if addr + size_of::<T>() > self.buf.len() {
+    pub fn alloc(&mut self, size: usize, align: usize) -> SpaceAddr {
+        let addr =
+            self.alloc_addr + unsafe { self.buf.as_ptr().add(self.alloc_addr) }.align_offset(align);
+        if addr + size > self.buf.len() {
             // TODO
         }
-        self.alloc_addr = addr + size_of::<T>();
+        self.alloc_addr = addr + size;
         addr
     }
 
-    pub unsafe fn get<T>(&self, addr: SpaceAddr) -> &T {
-        assert!(addr < self.alloc_addr);
-        let addr = unsafe { self.buf.as_ptr().add(addr).cast::<T>() };
+    pub fn typed_alloc<T>(&mut self) -> SpaceAddr {
+        self.alloc(size_of::<T>(), align_of::<T>())
+    }
+
+    pub fn get(&self, addr: SpaceAddr, size: usize) -> &[u8] {
+        assert!(addr + size <= self.alloc_addr);
+        &self.buf[addr..addr + size]
+    }
+
+    pub fn get_mut(&mut self, addr: SpaceAddr, size: usize) -> &mut [u8] {
+        assert!(addr + size <= self.alloc_addr);
+        &mut self.buf[addr..addr + size]
+    }
+
+    pub unsafe fn typed_get<T>(&self, addr: SpaceAddr) -> &T {
+        let addr = self.get(addr, size_of::<T>()).as_ptr().cast::<T>();
         assert!(addr.is_aligned());
         unsafe { &*addr }
     }
 
-    pub unsafe fn write<T>(&mut self, addr: SpaceAddr, value: T) {
-        assert!(addr < self.alloc_addr);
-        let addr = unsafe { self.buf.as_mut_ptr().add(addr).cast::<T>() };
+    pub unsafe fn typed_write<T>(&mut self, addr: SpaceAddr, value: T) {
+        let addr = self.get_mut(addr, size_of::<T>()).as_mut_ptr().cast::<T>();
         assert!(addr.is_aligned());
         unsafe { addr.write(value) }
     }
