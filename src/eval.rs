@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::{
     code::{Block, Instr, InstrIndex},
+    sched::Sched,
     space::{Space, SpaceAddr},
 };
 
@@ -145,7 +146,11 @@ pub enum ExecuteError {
 }
 
 impl Eval {
-    pub fn execute(&mut self, space: &mut Space) -> Result<ExecuteStatus, ExecuteError> {
+    pub fn execute(
+        &mut self,
+        space: &mut Space,
+        sched: &mut Sched,
+    ) -> Result<ExecuteStatus, ExecuteError> {
         let mut frame = self.frames.last_mut().expect("last frame exists");
         'control: loop {
             let name = unsafe { &(*frame.block).name };

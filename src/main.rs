@@ -10,7 +10,9 @@ use std::{error::Error, sync::Arc};
 use crate::{
     code::{Block, Instr},
     eval::{Closure, Eval, intrinsics},
+    sched::Sched,
     space::Space,
+    task::Task,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -28,7 +30,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         num_captured: 0,
         num_value: 1,
     };
-    let call_simple = Closure::main(
+    let prog = Closure::main(
         vec![
             Instr::LoadClosure(0, Arc::new(simple), vec![]),
             Instr::Call(0, 0, vec![]),
@@ -37,8 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         1,
     );
 
-    let mut eval = Eval::new(&call_simple)?;
-    eval.execute(&mut Space::new(4 << 10))?;
-    unsafe { call_simple.drop_main() }
+    worker::run(&prog);
+    unsafe { prog.drop_main() }
     Ok(())
 }
