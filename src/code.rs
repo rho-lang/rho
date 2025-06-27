@@ -1,33 +1,43 @@
 use std::sync::Arc;
 
 use crate::{
-    eval::{ExecuteError, TypeError, Value},
+    eval::{ExecuteError, Value},
     oracle::Oracle,
     space::Space,
 };
 
+#[derive(Debug)]
 pub enum Stmt {
     Expr(Expr),
-    Assign(String, Expr),
+
     Loop(Expr),
     Break,
     Continue,
     Return(Expr),
+
+    // concurrency primitives
+    Wait(Expr),   // wait on a Future to notify
+    Notify(Expr), // notify all tasks `Wait`ing on a Future
+    Spawn(Expr),
+
+    Assign(String, Expr),
+    Package(String),
+    Export(String),
 }
 
+#[derive(Debug)]
 pub enum Expr {
     Literal(Literal),
+    Import(String, String),
     Var(String),
     Compound(Vec<Stmt>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
     Match(Box<Match>),
-    // concurrency primitives
-    Spawn(Func),
-    Future,            // the synchronization object
-    Wait(Box<Expr>),   // wait on a Future to notify
-    Notify(Box<Expr>), // notify all tasks `Wait`ing on a Future
+
+    Future, // the synchronization object
 }
 
+#[derive(Debug)]
 pub enum Literal {
     Unit,
     String(String),
@@ -36,6 +46,7 @@ pub enum Literal {
 
 // if `scrutinee` (e.g., `x`) matches `pattern` (e.g., `True`), evaluate
 // `and_then`, otherwise evaluate `or_else`
+#[derive(Debug)]
 pub struct Match {
     pub scrutinee: Expr, // the field name is borrowed from Rust reference on pattern matching
     pub pattern: Expr,
@@ -43,6 +54,7 @@ pub struct Match {
     pub or_else: Expr,
 }
 
+#[derive(Debug)]
 pub struct Func {
     pub params: Vec<String>,
     pub body: Box<Expr>,
