@@ -13,8 +13,8 @@ pub struct Source {
 
 #[derive(Debug, Error)]
 pub enum ParseError {
-    #[error("unexpected source")]
-    Unexpected,
+    #[error("expect {0}")]
+    Expect(&'static str),
     #[error("double package")]
     DoublePackage,
     #[error("invalid package")]
@@ -24,9 +24,9 @@ pub enum ParseError {
 impl FromStr for Source {
     type Err = ParseError;
 
-    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut source = Self::default();
-        source.parse(&mut trim(&mut s))?;
+        source.parse(&mut trim(s))?;
         Ok(source)
     }
 }
@@ -104,7 +104,7 @@ impl Source {
         if s.starts_with(|c: char| c.is_alphabetic()) {
             self.parse_var(s)
         } else {
-            Err(ParseError::Unexpected)
+            Err(ParseError::Expect("expression"))
         }
     }
 
@@ -140,7 +140,7 @@ impl Source {
     fn parse_assign(&mut self, s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
         let id = extract_identifier(s)?;
         let Some(rest) = trim(s).strip_prefix('=') else {
-            return Err(ParseError::Unexpected);
+            return Err(ParseError::Expect("="));
         };
         *s = trim(rest);
         Ok(vec![Stmt::Assign(id.into(), self.parse_expr(s)?)])
@@ -190,17 +190,15 @@ impl Source {
     fn parse_string_literal(&mut self, s: &mut &str) -> Result<Expr, ParseError> {
         let mut escaping = false;
         let mut literal = String::new();
-        for (i, c) in s.chars().enumerate() {
+        for (i, c) in s.char_indices() {
             if escaping {
-                let cc = match c {
-                    // TODO
-                    _ => c,
-                };
+                let cc = c; // TODO
                 literal.push(cc);
                 escaping = false;
                 continue;
             }
             if c == '"' {
+                // `i + 1` must be byte boundary; we know we are skipping a '"'
                 (_, *s) = s.split_at(i + 1);
                 return Ok(Expr::Literal(Literal::String(literal)));
             }
@@ -210,7 +208,7 @@ impl Source {
                 literal.push(c)
             }
         }
-        Err(ParseError::Unexpected)
+        Err(ParseError::Expect("closing quote of string literal"))
     }
 
     fn parse_func(&mut self, s: &mut &str) -> Result<Expr, ParseError> {
@@ -231,12 +229,12 @@ impl Source {
 }
 
 fn extract_identifier<'a>(s: &mut &'a str) -> Result<&'a str, ParseError> {
-    for (i, c) in s.chars().enumerate() {
+    for (i, c) in s.char_indices() {
         if !c.is_alphanumeric() {
             let id;
             (id, *s) = s.split_at(i);
             return if i == 0 {
-                Err(ParseError::Unexpected)
+                Err(ParseError::Expect("identifier"))
             } else {
                 Ok(id)
             };
