@@ -1,5 +1,6 @@
 use crate::{
     eval::{Eval, ExecuteError, ExecuteStatus},
+    oracle::Oracle,
     sched::{NotifyToken, Sched},
     space::Space,
 };
@@ -18,8 +19,13 @@ impl Task {
         Self { eval }
     }
 
-    pub fn run(&mut self, space: &mut Space, sched: &mut Sched) -> Result<RunStatus, ExecuteError> {
-        let status = match self.eval.execute(space, sched)? {
+    pub fn run(
+        &mut self,
+        space: &mut Space,
+        sched: &mut Sched,
+        oracle: &mut Oracle,
+    ) -> Result<RunStatus, ExecuteError> {
+        let status = match self.eval.execute(space, sched, oracle)? {
             ExecuteStatus::Waiting(notify_token) => RunStatus::Waiting(notify_token),
             ExecuteStatus::Exited => RunStatus::Exited,
         };

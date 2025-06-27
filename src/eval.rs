@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::{
     code::{Block, Instr, InstrIndex},
+    oracle::Oracle,
     sched::{NotifyToken, Sched},
     space::{Space, SpaceAddr},
     task::Task,
@@ -156,6 +157,7 @@ impl Eval {
         &mut self,
         space: &mut Space,
         sched: &mut Sched,
+        oracle: &mut Oracle,
     ) -> Result<ExecuteStatus, ExecuteError> {
         // the contract here is `execute` should only be called after calling `init`,
         // and should not be called again after returning Exited
@@ -203,7 +205,7 @@ impl Eval {
                     Instr::Jump(_, Some(_)) => todo!(),
 
                     Instr::Intrinsic(intrinsic, indexes) => {
-                        intrinsic(&mut frame.values, indexes, space)?
+                        intrinsic(&mut frame.values, indexes, space, oracle)?
                     }
 
                     Instr::LoadUnit(dst) => frame.values[*dst] = Value::unit(),
@@ -327,6 +329,7 @@ pub mod intrinsics {
     use crate::{
         code::ValueIndex,
         eval::{TypeError, Value},
+        oracle::Oracle,
         space::Space,
     };
 
@@ -334,6 +337,7 @@ pub mod intrinsics {
         values: &mut [Value],
         indexes: &[ValueIndex],
         space: &mut Space,
+        _: &mut Oracle,
     ) -> Result<(), TypeError> {
         let message = values[indexes[0]].get_str(space)?;
         tracing::info!(message);

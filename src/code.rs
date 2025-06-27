@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     eval::{TypeError, Value},
+    oracle::Oracle,
     space::Space,
 };
 
@@ -70,7 +71,8 @@ pub enum Instr {
 }
 
 // currently not seen any intrinsic that need to be `unsafe`
-pub type Intrinsic = fn(&mut [Value], &[ValueIndex], &mut Space) -> Result<(), TypeError>;
+pub type Intrinsic =
+    fn(&mut [Value], &[ValueIndex], &mut Space, &mut Oracle) -> Result<(), TypeError>;
 
 #[derive(Debug)]
 pub struct JumpCond {
