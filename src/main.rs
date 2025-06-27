@@ -18,24 +18,24 @@ use crate::{
 const SOURCE: &str = r#"
 let fut1 = future
 let simple = func() {
-    intrinsic trace "[simple] start"
+    intrinsic trace ("[simple] start")
     let fut2 = future
-    intrinsic notify_after fut2 "1s"
+    intrinsic notify_after (fut2, "1s")
     wait fut2
     notify fut1
-    intrinsic trace "[simple] notified"
+    intrinsic trace ("[simple] notified")
 }
 spawn simple
-intrinsic trace "[main] spawned"
+intrinsic trace ("[main] spawned")
 wait fut1
-intrinsic trace "[main] wait finish"
+intrinsic trace ("[main] wait finish")
 "#;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
-    // let source = SOURCE.parse::<Source>()?;
-    // println!("{source:?}");
+    let source = SOURCE.parse::<Source>()?;
+    println!("{source:#?}");
 
     let simple = Block {
         name: "simple".into(),

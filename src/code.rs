@@ -23,6 +23,7 @@ pub enum Stmt {
     Assign(String, Expr),
     Package(String),
     Export(String),
+    Intrinsic(syntax::Intrinsic),
 }
 
 #[derive(Debug)]
@@ -32,7 +33,7 @@ pub enum Expr {
     Var(String),
     Compound(Vec<Stmt>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
-    Match(Box<Match>),
+    Match(Box<syntax::Match>),
 
     Future, // the synchronization object
 }
@@ -44,14 +45,25 @@ pub enum Literal {
     Func(Func),
 }
 
-// if `scrutinee` (e.g., `x`) matches `pattern` (e.g., `True`), evaluate
-// `and_then`, otherwise evaluate `or_else`
-#[derive(Debug)]
-pub struct Match {
-    pub scrutinee: Expr, // the field name is borrowed from Rust reference on pattern matching
-    pub pattern: Expr,
-    pub and_then: Expr,
-    pub or_else: Expr,
+pub mod syntax {
+    use super::*;
+
+    // if `scrutinee` (e.g., `x`) matches `pattern` (e.g., `True`), evaluate
+    // `and_then`, otherwise evaluate `or_else`
+    #[derive(Debug)]
+    pub struct Match {
+        pub scrutinee: Expr, // the field name is borrowed from Rust reference on pattern matching
+        pub pattern: Expr,
+        pub and_then: Expr,
+        pub or_else: Expr,
+    }
+
+    #[derive(Debug)]
+    pub struct Intrinsic {
+        pub id: String,
+        pub dst_vars: Vec<String>,
+        pub args: Vec<Expr>,
+    }
 }
 
 #[derive(Debug)]
@@ -71,7 +83,7 @@ pub enum Instr {
 
     Copy(ValueIndex, ValueIndex),
     Call(ValueIndex, ValueIndex, Vec<ValueIndex>), // destination, closure, arguments
-    Jump(InstrIndex, Option<JumpCond>),
+    Jump(InstrIndex, Option<instr::Match>),
     Return(ValueIndex),
 
     Spawn(ValueIndex),
@@ -79,17 +91,21 @@ pub enum Instr {
     Wait(ValueIndex),
     Notify(ValueIndex),
 
-    Intrinsic(Intrinsic, Vec<ValueIndex>),
+    Intrinsic(instr::Intrinsic, Vec<ValueIndex>),
 }
 
-// currently not seen any intrinsic that need to be `unsafe`
-pub type Intrinsic =
-    fn(&mut [Value], &[ValueIndex], &mut Space, &mut Oracle) -> Result<(), ExecuteError>;
+pub mod instr {
+    use super::*;
 
-#[derive(Debug)]
-pub struct JumpCond {
-    pub scrutinee: ValueIndex,
-    pub pattern: ValueIndex,
+    // currently not seen any intrinsic that need to be `unsafe`
+    pub type Intrinsic =
+        fn(&mut [Value], &[ValueIndex], &mut Space, &mut Oracle) -> Result<(), ExecuteError>;
+
+    #[derive(Debug)]
+    pub struct Match {
+        pub scrutinee: ValueIndex,
+        pub pattern: ValueIndex,
+    }
 }
 
 #[derive(Debug)]
