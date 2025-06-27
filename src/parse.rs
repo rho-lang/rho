@@ -93,9 +93,11 @@ impl Source {
             ("func", Self::parse_func),
             ("future", |_, _| Ok(Expr::Future)),
             ("if", Self::parse_match),
-            ("unit", |_, _| Ok(Expr::Literal(Literal::Unit))),
+            // just write `{}`
+            // ("unit", |_, _| Ok(Expr::Literal(Literal::Unit))),
         ] {
-            if s.starts_with(prefix) {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                *s = trim(rest);
                 return method(self, s);
             }
         }
@@ -131,8 +133,8 @@ impl Source {
         Ok(vec![Stmt::Export(id.into())])
     }
 
-    fn parse_import(&mut self, s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
-        Ok(vec![])
+    fn parse_import(&mut self, _: &mut &str) -> Result<Vec<Stmt>, ParseError> {
+        todo!()
     }
 
     fn parse_assign(&mut self, s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
@@ -165,13 +167,50 @@ impl Source {
     }
 
     fn parse_compound(&mut self, s: &mut &str) -> Result<Expr, ParseError> {
-        //
-        Ok(Expr::Compound(vec![], Expr::Literal(Literal::Unit).into()))
+        let mut stmts = Vec::new();
+        loop {
+            if let Some(rest) = s.strip_prefix('}') {
+                *s = rest;
+                break;
+            }
+            stmts.extend(self.parse_directive(s)?);
+            *s = trim(s)
+        }
+        let expr = if let Some(Stmt::Expr(_)) = stmts.last() {
+            let Some(Stmt::Expr(expr)) = stmts.pop() else {
+                unreachable!()
+            };
+            expr
+        } else {
+            Expr::Literal(Literal::Unit)
+        };
+        Ok(Expr::Compound(stmts, expr.into()))
     }
 
     fn parse_string_literal(&mut self, s: &mut &str) -> Result<Expr, ParseError> {
-        //
-        Ok(Expr::Literal(Literal::String("".into())))
+        let mut escaping = false;
+        let mut literal = String::new();
+        for (i, c) in s.chars().enumerate() {
+            if escaping {
+                let cc = match c {
+                    // TODO
+                    _ => c,
+                };
+                literal.push(cc);
+                escaping = false;
+                continue;
+            }
+            if c == '"' {
+                (_, *s) = s.split_at(i + 1);
+                return Ok(Expr::Literal(Literal::String(literal)));
+            }
+            if c == '\\' {
+                escaping = true
+            } else {
+                literal.push(c)
+            }
+        }
+        Err(ParseError::Unexpected)
     }
 
     fn parse_func(&mut self, s: &mut &str) -> Result<Expr, ParseError> {
