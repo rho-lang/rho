@@ -1,5 +1,6 @@
 mod code;
 mod eval;
+mod oracle;
 mod sched;
 mod space;
 mod task;

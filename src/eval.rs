@@ -84,10 +84,12 @@ impl Closure {
 #[derive(Debug, Clone, Copy)]
 struct Future(NotifyToken);
 
+#[derive(Debug, Default)]
 pub struct Eval {
     frames: Vec<Frame>,
 }
 
+#[derive(Debug)]
 struct Frame {
     block: *const Block,
     instr_pointer: InstrIndex,
@@ -96,12 +98,12 @@ struct Frame {
 }
 
 impl Eval {
-    pub fn new(closure: &Closure) -> Result<Self, ArityError> {
-        let mut eval = Self {
-            frames: Default::default(),
-        };
-        eval.push_frame(closure, &[])?;
-        Ok(eval)
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn init(&mut self, closure: &Closure) -> Result<(), ArityError> {
+        self.push_frame(closure, &[])
     }
 }
 
@@ -155,6 +157,8 @@ impl Eval {
         space: &mut Space,
         sched: &mut Sched,
     ) -> Result<ExecuteStatus, ExecuteError> {
+        // the contract here is `execute` should only be called after calling `init`,
+        // and should not be called again after returning Exited
         let mut frame = self.frames.last_mut().expect("last frame exists");
         'control: loop {
             let name = unsafe { &(*frame.block).name };
@@ -222,7 +226,9 @@ impl Eval {
                     }
                     Instr::Spawn(closure) => {
                         let closure = frame.values[*closure].get_closure(space)?;
-                        sched.spawn(Task::new(closure)?);
+                        let mut eval = Self::new();
+                        eval.init(closure)?;
+                        sched.spawn(Task::new(eval));
                     }
                     Instr::LoadFuture(dst) => {
                         let future = Future(sched.alloc_notify_token());

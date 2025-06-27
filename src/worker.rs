@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    eval::Closure,
+    eval::{Closure, Eval},
+    oracle::Oracle,
     sched::{Sched, SchedStatus},
     space::Space,
     task::{RunStatus, Task},
@@ -11,16 +12,27 @@ pub fn run(main_closure: &Closure) {
     let mut tasks = HashMap::new();
     let mut space = Space::new(4 << 10);
     let mut sched = Sched::new();
+    let mut oracle = Oracle::TimerQueue(Default::default());
 
-    sched.spawn(Task::new(main_closure).expect("top level task is created with \"main\" closure"));
+    let mut eval = Eval::new();
+    if let Err(err) = eval.init(main_closure) {
+        tracing::error!(%err, "top level task is not \"main-complaint\"");
+        return;
+    };
+    sched.spawn(Task::new(eval));
+
     loop {
         sched.install_spawned_tasks(&mut tasks);
         let task_id = match sched.advance() {
             SchedStatus::Idle => break,
             SchedStatus::Ready(task_id) => task_id,
             SchedStatus::Blocked => {
-                // TODO
-                continue;
+                if oracle.advance(&mut sched) {
+                    continue;
+                } else {
+                    tracing::error!("worker halted");
+                    break;
+                }
             }
         };
         let task = tasks.get_mut(&task_id).expect("task {task_id} exists");

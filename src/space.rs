@@ -15,8 +15,7 @@ impl Space {
     }
 
     pub fn alloc(&mut self, size: usize, align: usize) -> SpaceAddr {
-        let addr =
-            self.alloc_addr + unsafe { self.buf.as_ptr().add(self.alloc_addr) }.align_offset(align);
+        let addr = self.alloc_addr + (&self.buf[self.alloc_addr] as *const u8).align_offset(align);
         if addr + size > self.buf.len() {
             // TODO
         }
@@ -39,7 +38,7 @@ impl Space {
     }
 
     /// # Safety
-    /// The caller must ensure `addr` contains a `T` instance, e.g., was 
+    /// The caller must ensure `addr` contains a `T` instance, e.g., was
     /// `typed_alloc::<T>`ed
     pub unsafe fn typed_get<T>(&self, addr: SpaceAddr) -> &T {
         let addr = self.get(addr, size_of::<T>()).as_ptr().cast::<T>();
@@ -47,6 +46,8 @@ impl Space {
         unsafe { &*addr }
     }
 
+    /// # Safety
+    /// Same as `typed_get`.
     pub unsafe fn typed_write<T>(&mut self, addr: SpaceAddr, value: T) {
         let addr = self.get_mut(addr, size_of::<T>()).as_mut_ptr().cast::<T>();
         assert!(addr.is_aligned());
