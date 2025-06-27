@@ -10,7 +10,7 @@ pub struct Sched {
     pending_tasks: Vec<(TaskId, Task)>,
     ready_queue: VecDeque<TaskId>,
     next_notify_token: NotifyToken,
-    notify_queue: HashMap<NotifyToken, Vec<TaskId>>,
+    notify_tasks: HashMap<NotifyToken, Vec<TaskId>>,
 }
 
 impl Default for Sched {
@@ -26,7 +26,7 @@ impl Sched {
             pending_tasks: Default::default(),
             ready_queue: Default::default(),
             next_notify_token: 0,
-            notify_queue: Default::default(),
+            notify_tasks: Default::default(),
         }
     }
 
@@ -41,12 +41,30 @@ impl Sched {
         for (task_id, task) in self.pending_tasks.drain(..) {
             let replaced = tasks.insert(task_id, task);
             assert!(replaced.is_none(), "task {task_id} already exists");
-            self.ready_queue.push_back(task_id);
+            self.ready_queue.push_back(task_id)
         }
     }
+}
 
-    pub fn retrieve_next_task(&mut self) -> Option<TaskId> {
-        self.ready_queue.pop_front()
+pub enum SchedStatus {
+    Idle,
+    Ready(TaskId),
+    Blocked,
+}
+
+impl Sched {
+    pub fn advance(&mut self) -> SchedStatus {
+        assert!(
+            self.pending_tasks.is_empty(),
+            "cannot advance with task(s) pending install"
+        );
+        if let Some(task_id) = self.ready_queue.pop_front() {
+            SchedStatus::Ready(task_id)
+        } else if self.notify_tasks.is_empty() {
+            SchedStatus::Idle
+        } else {
+            SchedStatus::Blocked
+        }
     }
 
     pub fn alloc_notify_token(&mut self) -> NotifyToken {
@@ -55,12 +73,12 @@ impl Sched {
     }
 
     pub fn block(&mut self, task_id: TaskId, token: NotifyToken) {
-        self.notify_queue.entry(token).or_default().push(task_id)
+        self.notify_tasks.entry(token).or_default().push(task_id)
     }
 
     pub fn notify(&mut self, token: NotifyToken) {
         for task_id in self
-            .notify_queue
+            .notify_tasks
             .remove(&token)
             .expect("notify token notified at most once")
         {
@@ -68,9 +86,6 @@ impl Sched {
         }
     }
 
-    pub fn discard_notify_token(&mut self, token: NotifyToken) {
-        self.notify_queue
-            .remove(&token)
-            .expect("notify token exists");
-    }
+    // TODO figure out a way to identify NotifyToken without potential notifier, if
+    // possible
 }

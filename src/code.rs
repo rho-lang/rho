@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    eval::{Eval, TypeError, Value},
+    eval::{TypeError, Value},
     space::Space,
 };
 
@@ -33,11 +33,11 @@ pub enum Literal {
     Func(Func),
 }
 
-// if `actual` (e.g., `x`) matches `expected` (e.g., `True`), evaluate
+// if `scrutinee` (e.g., `x`) matches `pattern` (e.g., `True`), evaluate
 // `and_then`, otherwise evaluate `or_else`
 pub struct Match {
-    pub actual: Expr,
-    pub expected: Expr,
+    pub scrutinee: Expr, // the field name is borrowed from Rust reference on pattern matching
+    pub pattern: Expr,
     pub and_then: Expr,
     pub or_else: Expr,
 }
@@ -74,8 +74,8 @@ pub type Intrinsic = fn(&mut [Value], &[ValueIndex], &mut Space) -> Result<(), T
 
 #[derive(Debug)]
 pub struct JumpCond {
-    pub actual: ValueIndex,
-    pub expected: ValueIndex,
+    pub scrutinee: ValueIndex,
+    pub pattern: ValueIndex,
 }
 
 #[derive(Debug)]

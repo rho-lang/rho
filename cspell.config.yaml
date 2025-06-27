@@ -8,6 +8,7 @@ words:
   - miri
   - reborrow
   - Sched
+  - scrutinee
   - thiserror
 ignoreWords: []
 import: []
