@@ -21,6 +21,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         instrs: vec![
             Instr::LoadString(1, "[simple] start".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
+            Instr::LoadFuture(1),
+            Instr::LoadString(2, "1s".into()),
+            Instr::Intrinsic(intrinsics::notify_after, vec![1, 2]),
+            Instr::Wait(1),
             Instr::Notify(0),
             Instr::LoadString(1, "[simple] notified".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
@@ -29,7 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ],
         num_param: 0,
         num_captured: 1,
-        num_value: 2,
+        num_value: 3,
     };
     let prog = Closure::main(
         vec![

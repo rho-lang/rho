@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     code::{Block, Instr, InstrIndex},
-    oracle::Oracle,
+    oracle::{Oracle, OracleError},
     sched::{NotifyToken, Sched},
     space::{Space, SpaceAddr},
     task::Task,
@@ -146,10 +146,14 @@ pub enum ExecuteStatus {
 
 #[derive(Error, Debug)]
 pub enum ExecuteError {
-    #[error(transparent)]
-    TypeError(#[from] TypeError),
-    #[error(transparent)]
-    ArityError(#[from] ArityError),
+    #[error("{0}")]
+    Type(#[from] TypeError),
+    #[error("{0}")]
+    Arity(#[from] ArityError),
+    #[error("{0}")]
+    Oracle(#[from] OracleError),
+    #[error("{0}")]
+    Intrinsic(#[from] intrinsics::Error),
 }
 
 impl Eval {
@@ -326,21 +330,53 @@ impl Value {
 }
 
 pub mod intrinsics {
+    use thiserror::Error;
+
     use crate::{
         code::ValueIndex,
-        eval::{TypeError, Value},
+        eval::{ExecuteError, Value},
         oracle::Oracle,
         space::Space,
     };
+
+    use super::Future;
+
+    #[derive(Error, Debug)]
+    pub enum Error {
+        #[error("{0}")]
+        ParseDuration(#[from] humantime::DurationError),
+    }
+
+    // impl<E: Into<Error>> From<E> for ExecuteError {
+    //     fn from(err: E) -> Self {
+    //         ExecuteError::from(err.into())
+    //     }
+    // }
 
     pub fn trace(
         values: &mut [Value],
         indexes: &[ValueIndex],
         space: &mut Space,
         _: &mut Oracle,
-    ) -> Result<(), TypeError> {
+    ) -> Result<(), ExecuteError> {
         let message = values[indexes[0]].get_str(space)?;
         tracing::info!(message);
+        Ok(())
+    }
+
+    pub fn notify_after(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        space: &mut Space,
+        oracle: &mut Oracle,
+    ) -> Result<(), ExecuteError> {
+        let Future(notify_token) = values[indexes[0]].load_future(space)?;
+        let duration = values[indexes[1]]
+            .get_str(space)?
+            .parse::<humantime::Duration>()
+            .map_err(Error::ParseDuration)?
+            .into();
+        oracle.notify_after(notify_token, duration)?;
         Ok(())
     }
 }
