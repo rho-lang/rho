@@ -5,7 +5,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::code::{Expr, Instr, InstrIndex, Stmt, ValueIndex};
+use crate::code::{Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic};
 
 pub struct Compile {
     main: Vec<Instr>,
@@ -15,6 +15,8 @@ pub struct Compile {
     current_package: Package,
     current_block: CompileBlock,
     current_outer_blocks: Vec<CompileBlock>,
+
+    intrinsics: HashMap<String, Intrinsic>,
 }
 
 #[derive(Default)]
@@ -23,7 +25,6 @@ struct CompileBlock {
     expr_index: ValueIndex,
     scopes: Vec<HashMap<String, ValueIndex>>,
     loop_jump_targets: Vec<InstrIndex>,
-    captures: Vec<ValueIndex>, // indexed into stack of the outer block
 }
 
 #[derive(Default)]
@@ -41,6 +42,8 @@ pub enum CompileError {
     OrphanBreak,
     #[error("continue outside of loop")]
     OrphanContinue,
+    #[error("unknown intrinsic: {0}")]
+    UnknownIntrinsic(String),
 }
 
 impl Compile {
@@ -110,7 +113,26 @@ impl Compile {
                 self.add(Instr::Jump(jump_target, None))
             }
 
-            Stmt::Intrinsic(intrinsic) => todo!(),
+            Stmt::Intrinsic(intrinsic) => {
+                let Some(&native_fn) = self.intrinsics.get(&intrinsic.id) else {
+                    return Err(CompileError::UnknownIntrinsic(intrinsic.id));
+                };
+                let expr_index = self.current_block.expr_index;
+                self.current_block.expr_index += intrinsic.dst_ids.len();
+                // first evaluate arguments without destination ids in scope
+                for expr in intrinsic.args {
+                    self.input_expr(expr)?;
+                    self.current_block.expr_index += 1
+                }
+                for (index, id) in intrinsic.dst_ids.into_iter().enumerate() {
+                    self.assign(id, expr_index + index)
+                }
+                self.add(Instr::Intrinsic(
+                    native_fn,
+                    (expr_index..self.current_block.expr_index).collect(),
+                ));
+                self.current_block.expr_index = expr_index
+            }
 
             Stmt::Return(expr) => {
                 self.input_expr(expr)?;
@@ -140,6 +162,59 @@ impl Compile {
     }
 
     fn input_expr(&mut self, expr: Expr) -> Result<(), CompileError> {
+        let expr_index = self.current_block.expr_index;
+        match expr {
+            Expr::Literal(Literal::Func(func)) => {
+                self.current_outer_blocks
+                    .push(take(&mut self.current_block));
+                self.current_block.expr_index += func.params.len();
+                for (index, id) in func.params.into_iter().enumerate() {
+                    self.assign(id, index)
+                }
+                self.input_expr(*func.body)?;
+
+                let func_block = replace(
+                    &mut self.current_block,
+                    self.current_outer_blocks.pop().unwrap(),
+                );
+                // TODO
+            }
+            Expr::Call(closure, args) => {
+                self.input_expr(*closure)?;
+                for arg in args {
+                    self.current_block.expr_index += 1;
+                    self.input_expr(arg)?
+                }
+                self.add(Instr::Call(
+                    expr_index,
+                    expr_index,
+                    (expr_index + 1..=self.current_block.expr_index).collect(),
+                ))
+            }
+
+            Expr::Literal(Literal::Unit) => self.add(Instr::MakeUnit(expr_index)),
+            Expr::Literal(Literal::String(string)) => {
+                self.add(Instr::MakeString(expr_index, string))
+            }
+            Expr::Future => self.add(Instr::MakeFuture(expr_index)),
+
+            Expr::Var(id) => {
+                if let Some(value_index) = self.var(&id) {
+                    self.add(Instr::Copy(expr_index, value_index))
+                } else {
+                    todo!()
+                }
+            }
+            Expr::Compound(stmts, expr) => {
+                for stmt in stmts {
+                    self.input_stmt(stmt)?
+                }
+                self.input_expr(*expr)?
+            }
+
+            Expr::Import(_, _) => todo!(),
+            Expr::Match(_) => todo!(),
+        }
         Ok(())
     }
 

@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Instr::CopyCaptured(0, 0),
             Instr::MakeString(1, "[simple] start".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
-            Instr::LoadFuture(1),
+            Instr::MakeFuture(1),
             Instr::MakeString(2, "1s".into()),
             Instr::Intrinsic(intrinsics::notify_after, vec![1, 2]),
             Instr::Wait(1),
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let prog = Closure::main(
         vec![
-            Instr::LoadFuture(0),
+            Instr::MakeFuture(0),
             Instr::MakeClosure(1, simple.into(), vec![0]),
             Instr::Spawn(1),
             Instr::MakeString(1, "[main] spawned".into()),

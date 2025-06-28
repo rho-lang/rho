@@ -253,7 +253,7 @@ impl Eval {
                         eval.init(frame.values[*closure].load_closure(space)?)?;
                         sched.spawn(Task::new(eval));
                     }
-                    Instr::LoadFuture(dst) => {
+                    Instr::MakeFuture(dst) => {
                         let future = Future(sched.alloc_notify_token());
                         frame.values[*dst] = Value::alloc_future(future, space)
                     }

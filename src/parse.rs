@@ -131,7 +131,7 @@ fn parse_package(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
 fn parse_intrinsic(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     let id = extract_identifier(s)?.into();
     *s = trim(s);
-    let dst_vars = extract_identifiers(s).into_iter().map(Into::into).collect();
+    let dst_ids = extract_identifiers(s).into_iter().map(Into::into).collect();
     *s = consume(trim(s), '(', "intrinsic argument list")?;
     let args = extract_args(s);
     *s = consume(
@@ -139,7 +139,7 @@ fn parse_intrinsic(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
         ')',
         "closing parenthesis of intrinsic argument list",
     )?;
-    Ok(vec![Stmt::Intrinsic(Intrinsic { id, dst_vars, args })])
+    Ok(vec![Stmt::Intrinsic(Intrinsic { id, dst_ids, args })])
 }
 
 fn parse_assign(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {

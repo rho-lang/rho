@@ -61,7 +61,7 @@ pub mod syntax {
     #[derive(Debug)]
     pub struct Intrinsic {
         pub id: String,
-        pub dst_vars: Vec<String>,
+        pub dst_ids: Vec<String>,
         pub args: Vec<Expr>,
     }
 }
@@ -95,7 +95,7 @@ pub enum Instr {
     Return(ValueIndex),
 
     Spawn(ValueIndex),
-    LoadFuture(ValueIndex),
+    MakeFuture(ValueIndex),
     Wait(ValueIndex),
     Notify(ValueIndex),
 
