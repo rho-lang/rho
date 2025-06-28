@@ -77,12 +77,10 @@ impl Sched {
     }
 
     pub fn notify(&mut self, token: NotifyToken) {
-        for task_id in self
-            .notify_tasks
-            .remove(&token)
-            .expect("notify token notified at most once")
-        {
-            self.ready_queue.push_back(task_id)
+        if let Some(task_ids) = self.notify_tasks.remove(&token) {
+            for task_id in task_ids {
+                self.ready_queue.push_back(task_id)
+            }
         }
     }
 

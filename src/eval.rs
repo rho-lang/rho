@@ -42,25 +42,13 @@ struct String {
 #[derive(Debug, Clone, Copy)]
 pub struct Closure {
     block: *const Block,
-    captured: [Value; 16],
+    captured: Value, // of an anonymous record type, or undefined if capture nothing
 }
 
 impl Closure {
     /// # Safety
     /// `block` must outlive Self.
-    pub unsafe fn new(
-        block: &Block,
-        captured_values: impl ExactSizeIterator<Item = Value>,
-    ) -> Self {
-        assert!(
-            block.num_captured <= 16,
-            "capturing more than 16 values is not supported"
-        );
-        assert_eq!(captured_values.len(), block.num_captured);
-        let mut captured = [Value::default(); 16];
-        for (dst, src) in captured.iter_mut().zip(captured_values) {
-            *dst = src
-        }
+    pub unsafe fn new(block: &Block, captured: Value) -> Self {
         Self { block, captured }
     }
 
@@ -74,12 +62,13 @@ impl Closure {
         });
         Self {
             block: Box::into_raw(block),
-            captured: Default::default(),
+            captured: Default::default(), // vacant value for capturing nothing
         }
     }
 
+    /// # Safety
+    /// `self` must be returned by `Closure::main`
     pub unsafe fn drop_main(self) {
-        // SAFETY: `block` is created by `Box::into_raw`, so it must be valid.
         drop(unsafe { Box::from_raw(self.block as *mut Block) });
     }
 }
@@ -127,8 +116,9 @@ impl Eval {
             });
         }
         let mut values = vec![Value::default(); block.num_value];
-        assert!(values.len() >= args.len());
-        for (dst, src) in values.iter_mut().zip(args) {
+        assert!(values.len() > args.len()); // greater for one more slot for captured
+        values[0] = closure.captured;
+        for (dst, src) in values.iter_mut().skip(1).zip(args) {
             *dst = *src
         }
         self.frames.push(Frame {
@@ -233,7 +223,11 @@ impl Eval {
                     }
                     Instr::MakeClosure(dst, block, captured) => {
                         let closure = unsafe {
-                            Closure::new(block, captured.iter().map(|&index| frame.values[index]))
+                            let captured = captured
+                                .map(|index| frame.values[index])
+                                // vacant value for capturing nothing
+                                .unwrap_or_default();
+                            Closure::new(block, captured)
                         };
                         let mut closure_value = Value {
                             type_id: TypeId::CLOSURE,
@@ -273,10 +267,6 @@ impl Eval {
                     Instr::Copy(dst, src) => {
                         let src_value = frame.values[*src];
                         frame.values[*dst] = src_value
-                    }
-                    Instr::CopyCaptured(dst, index) => {
-                        assert!(*index < unsafe { &*frame.closure.block }.num_captured);
-                        frame.values[*dst] = frame.closure.captured[*index]
                     }
 
                     Instr::GetAttr(dst, record, attr) => {

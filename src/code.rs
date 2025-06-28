@@ -80,20 +80,14 @@ pub type ValueIndex = usize;
 pub enum Instr {
     MakeUnit(ValueIndex),
     MakeString(ValueIndex, String),
-    MakeClosure(ValueIndex, Box<Block>, Vec<ValueIndex>), // destination, block, captured values
+    MakeClosure(ValueIndex, Box<Block>, Option<ValueIndex>), // destination, block, captured
 
     MakeRecordType(ValueIndex, RecordLayout),
     MakeRecord(ValueIndex, ValueIndex, Vec<(StringId, ValueIndex)>),
 
     MakeFuture(ValueIndex),
 
-    // here we have a dedicated instruction for copying captured value. firstly, it
-    // simplifies the implementation of compilation. secondly, captured values are
-    // not on stack at the first place; they reside as closure's property. a lazy
-    // copying potentially improve performance especially when a lot of values are
-    // captured for accessing in different cases
     Copy(ValueIndex, ValueIndex),
-    CopyCaptured(ValueIndex, usize),
 
     GetAttr(ValueIndex, ValueIndex, StringId), // #0 <- #1.#2
     SetAttr(ValueIndex, StringId, ValueIndex), // #0.#1 <- #2

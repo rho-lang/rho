@@ -4,10 +4,10 @@ mod eval;
 mod intern;
 mod oracle;
 mod parse;
-mod typing;
 mod sched;
 mod space;
 mod task;
+mod typing;
 mod worker;
 
 use std::error::Error;
@@ -15,7 +15,9 @@ use std::error::Error;
 use crate::{
     code::{Block, Instr},
     eval::{Closure, intrinsics},
+    intern::StringId,
     parse::Source,
+    typing::RecordLayout,
 };
 
 const SOURCE: &str = r#"
@@ -38,12 +40,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
     let source = SOURCE.parse::<Source>()?;
-    println!("{source:#?}");
+    println!("{source:?}");
 
+    const STRING_FUT1: StringId = 123;
     let simple = Block {
         name: "simple".into(),
         instrs: vec![
-            Instr::CopyCaptured(0, 0),
+            Instr::GetAttr(0, 0, STRING_FUT1),
             Instr::MakeString(1, "[simple] start".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
             Instr::MakeFuture(1),
@@ -63,7 +66,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let prog = Closure::main(
         vec![
             Instr::MakeFuture(0),
-            Instr::MakeClosure(1, simple.into(), vec![0]),
+            Instr::MakeRecordType(1, RecordLayout(vec![STRING_FUT1])),
+            Instr::MakeRecord(1, 1, vec![(STRING_FUT1, 0)]),
+            Instr::MakeClosure(1, simple.into(), Some(1)),
             Instr::Spawn(1),
             Instr::MakeString(1, "[main] spawned".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
