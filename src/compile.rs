@@ -23,6 +23,7 @@ struct CompileBlock {
     expr_index: ValueIndex,
     scopes: Vec<HashMap<String, ValueIndex>>,
     loop_jump_targets: Vec<InstrIndex>,
+    captures: Vec<ValueIndex>, // indexed into stack of the outer block
 }
 
 #[derive(Default)]
@@ -154,21 +155,10 @@ impl Compile {
             .insert(id, value_index);
     }
 
-    fn var(&mut self, id: &str) -> Option<ValueIndex> {
+    fn var(&self, id: &str) -> Option<ValueIndex> {
         for scope in self.current_block.scopes.iter().rev() {
             if let Some(&value_index) = scope.get(id) {
                 return Some(value_index);
-            }
-        }
-        None
-    }
-
-    fn captured_var(&mut self, id: &str) -> Option<ValueIndex> {
-        for block in self.current_outer_blocks.iter().rev() {
-            for scope in block.scopes.iter().rev() {
-                if let Some(&value_index) = scope.get(id) {
-                    return Some(value_index);
-                }
             }
         }
         None

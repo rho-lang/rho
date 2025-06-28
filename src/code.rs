@@ -68,6 +68,7 @@ pub mod syntax {
 
 #[derive(Debug)]
 pub struct Func {
+    // filled by parsing
     pub params: Vec<String>,
     pub body: Box<Expr>,
 }
@@ -79,8 +80,13 @@ pub type ValueIndex = usize;
 pub enum Instr {
     MakeUnit(ValueIndex),
     MakeString(ValueIndex, String),
-    MakeClosure(ValueIndex, Arc<Block>, Vec<ValueIndex>), // destination, block, captured values
+    MakeClosure(ValueIndex, Box<Block>, Vec<ValueIndex>), // destination, block, captured values
 
+    // here we have a dedicated instruction for copying captured value. firstly, it
+    // simplifies the implementation of compilation. secondly, captured values are
+    // not on stack at the first place; they reside as closure's property. a lazy
+    // copying potentially improve performance especially when a lot of values are
+    // captured for accessing in different cases
     Copy(ValueIndex, ValueIndex),
     CopyCaptured(ValueIndex, usize),
 

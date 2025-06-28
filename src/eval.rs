@@ -56,7 +56,12 @@ pub struct Closure {
 }
 
 impl Closure {
-    pub fn new(block: &Block, captured_values: impl ExactSizeIterator<Item = Value>) -> Self {
+    /// # Safety
+    /// `block` must outlive Self.
+    pub unsafe fn new(
+        block: &Block,
+        captured_values: impl ExactSizeIterator<Item = Value>,
+    ) -> Self {
         assert!(
             block.num_captured <= 16,
             "capturing more than 16 values is not supported"
@@ -223,8 +228,9 @@ impl Eval {
                         frame.values[*dst] = Value::alloc_string(literal, space)
                     }
                     Instr::MakeClosure(dst, block, captured) => {
-                        let closure =
-                            Closure::new(block, captured.iter().map(|&index| frame.values[index]));
+                        let closure = unsafe {
+                            Closure::new(block, captured.iter().map(|&index| frame.values[index]))
+                        };
                         let mut closure_value = Value {
                             type_id: TypeId::CLOSURE,
                             data: space.typed_alloc::<Closure>(),
@@ -238,6 +244,7 @@ impl Eval {
                         frame.values[*dst] = src_value
                     }
                     Instr::CopyCaptured(dst, index) => {
+                        assert!(*index < unsafe { &*frame.closure.block }.num_captured);
                         frame.values[*dst] = frame.closure.captured[*index]
                     }
 

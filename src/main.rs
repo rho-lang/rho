@@ -8,7 +8,7 @@ mod space;
 mod task;
 mod worker;
 
-use std::{error::Error, sync::Arc};
+use std::error::Error;
 
 use crate::{
     code::{Block, Instr},
@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let prog = Closure::main(
         vec![
             Instr::LoadFuture(0),
-            Instr::MakeClosure(1, Arc::new(simple), vec![0]),
+            Instr::MakeClosure(1, simple.into(), vec![0]),
             Instr::Spawn(1),
             Instr::MakeString(1, "[main] spawned".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
