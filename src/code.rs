@@ -77,11 +77,13 @@ pub type ValueIndex = usize;
 
 #[derive(Debug)]
 pub enum Instr {
-    LoadUnit(ValueIndex),
-    LoadString(ValueIndex, String),
-    LoadClosure(ValueIndex, Arc<Block>, Vec<ValueIndex>), // destination, block, captured values
+    MakeUnit(ValueIndex),
+    MakeString(ValueIndex, String),
+    MakeClosure(ValueIndex, Arc<Block>, Vec<ValueIndex>), // destination, block, captured values
 
     Copy(ValueIndex, ValueIndex),
+    CopyCaptured(ValueIndex, usize),
+
     Call(ValueIndex, ValueIndex, Vec<ValueIndex>), // destination, closure, arguments
     Jump(InstrIndex, Option<instr::Match>),
     Return(ValueIndex),

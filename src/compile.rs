@@ -5,7 +5,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::code::{Instr, Stmt, ValueIndex};
+use crate::code::{Expr, Instr, InstrIndex, Stmt, ValueIndex};
 
 pub struct Compile {
     main: Vec<Instr>,
@@ -13,12 +13,16 @@ pub struct Compile {
 
     current_package_name: String,
     current_package: Package,
-    current_blocks: Vec<CompileBlock>,
+    current_block: CompileBlock,
+    current_outer_blocks: Vec<CompileBlock>,
 }
 
+#[derive(Default)]
 struct CompileBlock {
-    scopes: Vec<HashMap<String, ValueIndex>>,
     instrs: Vec<Instr>,
+    expr_index: ValueIndex,
+    scopes: Vec<HashMap<String, ValueIndex>>,
+    loop_jump_targets: Vec<InstrIndex>,
 }
 
 #[derive(Default)]
@@ -32,13 +36,20 @@ pub enum CompileError {
     DuplicatedPackage(String),
     #[error("multiple package statement: {0}")]
     MultiplePackageStmt(String),
+    #[error("break outside of loop")]
+    OrphanBreak,
+    #[error("continue outside of loop")]
+    OrphanContinue,
 }
 
 impl Compile {
     pub fn input(&mut self, stmts: Vec<Stmt>) -> Result<(), CompileError> {
         for stmt in stmts {
-            //
+            self.input_stmt(stmt)?
         }
+
+        assert!(self.current_outer_blocks.is_empty());
+        self.main.extend(take(&mut self.current_block).instrs);
 
         let mut package_name = take(&mut self.current_package_name);
         if package_name.is_empty() {
@@ -58,23 +69,108 @@ impl Compile {
         match stmt {
             Stmt::Package(name) => {
                 let replaced = replace(&mut self.current_package_name, name);
-                if replaced.is_empty() {
-                    Ok(())
-                } else {
-                    Err(CompileError::MultiplePackageStmt(replaced))
+                if !replaced.is_empty() {
+                    return Err(CompileError::MultiplePackageStmt(replaced));
                 }
             }
-            Stmt::Expr(expr) => todo!(),
-            Stmt::Loop(expr) => todo!(),
-            Stmt::Break => todo!(),
-            Stmt::Continue => todo!(),
-            Stmt::Return(expr) => todo!(),
-            Stmt::Wait(expr) => todo!(),
-            Stmt::Notify(expr) => todo!(),
-            Stmt::Spawn(expr) => todo!(),
-            Stmt::Assign(_, expr) => todo!(),
-            Stmt::Export(_) => todo!(),
+            Stmt::Export(id) => todo!(),
+
+            // for simple one pass compilation, loop is translated into
+            // +0   Jump +2     # Continue target
+            // +1   Jump +n     # Break target
+            // ...              # Loop expr
+            // +x   Jump +0     # a Continue
+            // ...
+            // +y   Jump +1     # a Break
+            // ...
+            // +n-1 Jump +0     # normal loopback
+            // +n   ...         # first instruction after Loop
+            Stmt::Loop(expr) => {
+                let jump_target = self.current_block.instrs.len();
+                self.add(Instr::Jump(jump_target + 2, None));
+                self.add(Instr::Jump(usize::MAX, None)); // placeholder
+                self.current_block.loop_jump_targets.push(jump_target);
+                self.input_expr(expr)?;
+                self.current_block.loop_jump_targets.pop();
+                self.add(Instr::Jump(jump_target, None));
+                let after_target = self.current_block.instrs.len() + 1;
+                self.current_block.instrs[jump_target + 1] = Instr::Jump(after_target, None)
+            }
+            Stmt::Break => {
+                let Some(&jump_target) = self.current_block.loop_jump_targets.last() else {
+                    return Err(CompileError::OrphanBreak);
+                };
+                self.add(Instr::Jump(jump_target + 1, None))
+            }
+            Stmt::Continue => {
+                let Some(&jump_target) = self.current_block.loop_jump_targets.last() else {
+                    return Err(CompileError::OrphanContinue);
+                };
+                self.add(Instr::Jump(jump_target, None))
+            }
+
             Stmt::Intrinsic(intrinsic) => todo!(),
+
+            Stmt::Return(expr) => {
+                self.input_expr(expr)?;
+                self.add(Instr::Return(self.current_block.expr_index))
+            }
+            Stmt::Wait(expr) => {
+                self.input_expr(expr)?;
+                self.add(Instr::Wait(self.current_block.expr_index))
+            }
+            Stmt::Notify(expr) => {
+                self.input_expr(expr)?;
+                self.add(Instr::Notify(self.current_block.expr_index))
+            }
+            Stmt::Spawn(expr) => {
+                self.input_expr(expr)?;
+                self.add(Instr::Spawn(self.current_block.expr_index))
+            }
+            Stmt::Assign(id, expr) => {
+                self.input_expr(expr)?;
+                self.assign(id, self.current_block.expr_index);
+                self.current_block.expr_index += 1
+            }
+
+            Stmt::Expr(expr) => self.input_expr(expr)?,
         }
+        Ok(())
+    }
+
+    fn input_expr(&mut self, expr: Expr) -> Result<(), CompileError> {
+        Ok(())
+    }
+
+    fn add(&mut self, instr: Instr) {
+        self.current_block.instrs.push(instr)
+    }
+
+    fn assign(&mut self, id: String, value_index: ValueIndex) {
+        self.current_block
+            .scopes
+            .last_mut()
+            .unwrap()
+            .insert(id, value_index);
+    }
+
+    fn var(&mut self, id: &str) -> Option<ValueIndex> {
+        for scope in self.current_block.scopes.iter().rev() {
+            if let Some(&value_index) = scope.get(id) {
+                return Some(value_index);
+            }
+        }
+        None
+    }
+
+    fn captured_var(&mut self, id: &str) -> Option<ValueIndex> {
+        for block in self.current_outer_blocks.iter().rev() {
+            for scope in block.scopes.iter().rev() {
+                if let Some(&value_index) = scope.get(id) {
+                    return Some(value_index);
+                }
+            }
+        }
+        None
     }
 }

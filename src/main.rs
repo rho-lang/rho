@@ -41,16 +41,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let simple = Block {
         name: "simple".into(),
         instrs: vec![
-            Instr::LoadString(1, "[simple] start".into()),
+            Instr::CopyCaptured(0, 0),
+            Instr::MakeString(1, "[simple] start".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
             Instr::LoadFuture(1),
-            Instr::LoadString(2, "1s".into()),
+            Instr::MakeString(2, "1s".into()),
             Instr::Intrinsic(intrinsics::notify_after, vec![1, 2]),
             Instr::Wait(1),
             Instr::Notify(0),
-            Instr::LoadString(1, "[simple] notified".into()),
+            Instr::MakeString(1, "[simple] notified".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
-            Instr::LoadUnit(0),
+            Instr::MakeUnit(0),
             Instr::Return(0),
         ],
         num_param: 0,
@@ -60,20 +61,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let prog = Closure::main(
         vec![
             Instr::LoadFuture(0),
-            Instr::LoadClosure(1, Arc::new(simple), vec![0]),
+            Instr::MakeClosure(1, Arc::new(simple), vec![0]),
             Instr::Spawn(1),
-            Instr::LoadString(1, "[main] spawned".into()),
+            Instr::MakeString(1, "[main] spawned".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
             Instr::Wait(0),
-            Instr::LoadString(1, "[main] wait finish".into()),
+            Instr::MakeString(1, "[main] wait finish".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
-            Instr::LoadUnit(0),
+            Instr::MakeUnit(0),
             Instr::Return(0),
         ],
         2,
     );
 
-    worker::run(&prog);
+    worker::run(prog);
     unsafe { prog.drop_main() }
     Ok(())
 }

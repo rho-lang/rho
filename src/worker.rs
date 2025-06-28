@@ -8,7 +8,7 @@ use crate::{
     task::{RunStatus, Task},
 };
 
-pub fn run(main_closure: &Closure) {
+pub fn run(main_closure: Closure) {
     let mut tasks = HashMap::new();
     let mut space = Space::new(4 << 10);
     let mut sched = Sched::new();

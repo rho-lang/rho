@@ -49,6 +49,7 @@ struct String {
     len: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Closure {
     block: *const Block,
     captured: [Value; 16],
@@ -98,7 +99,7 @@ pub struct Eval {
 
 #[derive(Debug)]
 struct Frame {
-    block: *const Block,
+    closure: Closure,
     instr_pointer: InstrIndex,
     call_dst: Option<usize>,
     values: Vec<Value>,
@@ -109,7 +110,7 @@ impl Eval {
         Self::default()
     }
 
-    pub fn init(&mut self, closure: &Closure) -> Result<(), ArityError> {
+    pub fn init(&mut self, closure: Closure) -> Result<(), ArityError> {
         self.push_frame(closure, &[])
     }
 }
@@ -122,7 +123,7 @@ pub struct ArityError {
 }
 
 impl Eval {
-    fn push_frame(&mut self, closure: &Closure, args: &[Value]) -> Result<(), ArityError> {
+    fn push_frame(&mut self, closure: Closure, args: &[Value]) -> Result<(), ArityError> {
         let block = unsafe { &*closure.block };
         if args.len() != block.num_param {
             return Err(ArityError {
@@ -131,12 +132,12 @@ impl Eval {
             });
         }
         let mut values = vec![Value::default(); block.num_value];
-        assert!(values.len() >= block.num_captured + args.len());
-        for (dst, src) in values.iter_mut().zip(closure.captured.iter().chain(args)) {
+        assert!(values.len() >= args.len());
+        for (dst, src) in values.iter_mut().zip(args) {
             *dst = *src
         }
         self.frames.push(Frame {
-            block,
+            closure,
             instr_pointer: 0,
             call_dst: None,
             values,
@@ -173,9 +174,9 @@ impl Eval {
         // and should not be called again after returning Exited
         let mut frame = self.frames.last_mut().expect("last frame exists");
         'control: loop {
-            let name = unsafe { &(*frame.block).name };
+            let name = unsafe { &(*frame.closure.block).name };
             // optimize for sequentially execute instructions
-            for instr in &unsafe { &*frame.block }.instrs[frame.instr_pointer..] {
+            for instr in &unsafe { &*frame.closure.block }.instrs[frame.instr_pointer..] {
                 tracing::trace!(%frame.instr_pointer, %name, ?instr, "execute");
                 frame.instr_pointer += 1;
                 match instr {
@@ -188,8 +189,7 @@ impl Eval {
                         let replaced = frame.call_dst.replace(*dst);
                         assert!(replaced.is_none());
                         // borrow to `self` via `frame` ends here
-                        let closure = closure_value.get_closure(space)?;
-                        self.push_frame(closure, &arg_values)?;
+                        self.push_frame(closure_value.load_closure(space)?, &arg_values)?;
                         // reborrow
                         frame = self.frames.last_mut().expect("last frame exists");
                         continue 'control;
@@ -218,11 +218,11 @@ impl Eval {
                         intrinsic(&mut frame.values, indexes, space, oracle)?
                     }
 
-                    Instr::LoadUnit(dst) => frame.values[*dst] = Value::unit(),
-                    Instr::LoadString(dst, literal) => {
+                    Instr::MakeUnit(dst) => frame.values[*dst] = Value::unit(),
+                    Instr::MakeString(dst, literal) => {
                         frame.values[*dst] = Value::alloc_string(literal, space)
                     }
-                    Instr::LoadClosure(dst, block, captured) => {
+                    Instr::MakeClosure(dst, block, captured) => {
                         let closure =
                             Closure::new(block, captured.iter().map(|&index| frame.values[index]));
                         let mut closure_value = Value {
@@ -232,14 +232,18 @@ impl Eval {
                         closure_value.store_closure(closure, space)?;
                         frame.values[*dst] = closure_value
                     }
+
                     Instr::Copy(dst, src) => {
                         let src_value = frame.values[*src];
                         frame.values[*dst] = src_value
                     }
+                    Instr::CopyCaptured(dst, index) => {
+                        frame.values[*dst] = frame.closure.captured[*index]
+                    }
+
                     Instr::Spawn(closure) => {
-                        let closure = frame.values[*closure].get_closure(space)?;
                         let mut eval = Self::new();
-                        eval.init(closure)?;
+                        eval.init(frame.values[*closure].load_closure(space)?)?;
                         sched.spawn(Task::new(eval));
                     }
                     Instr::LoadFuture(dst) => {
@@ -309,9 +313,9 @@ impl Value {
         Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
-    fn get_closure<'a>(&'a self, space: &'a Space) -> Result<&'a Closure, TypeError> {
+    fn load_closure(&self, space: &Space) -> Result<Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(unsafe { space.typed_get(self.data) })
+        Ok(*unsafe { space.typed_get(self.data) })
     }
 
     fn store_closure(&mut self, closure: Closure, space: &mut Space) -> Result<(), TypeError> {
