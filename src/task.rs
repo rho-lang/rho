@@ -1,34 +1,34 @@
 use crate::{
-    eval::{Eval, ExecuteError, ExecuteStatus},
+    eval::{Eval, ExecuteError},
     oracle::Oracle,
-    sched::{NotifyToken, Sched},
+    sched::Sched,
     space::Space,
 };
 
+// currently Task is a redundant concept: a Task is no more than a Eval
+// tentatively save it for future extension: anything worker-oriented instead
+// of language-oriented should go here. and maybe some optimization can make use
+// of it
+
 pub struct Task {
     eval: Eval,
-}
-
-pub enum RunStatus {
-    Waiting(NotifyToken),
-    Exited,
 }
 
 impl Task {
     pub fn new(eval: Eval) -> Self {
         Self { eval }
     }
+}
 
+pub type RunStatus = crate::eval::ExecuteStatus;
+
+impl Task {
     pub fn run(
         &mut self,
         space: &mut Space,
         sched: &mut Sched,
         oracle: &mut Oracle,
     ) -> Result<RunStatus, ExecuteError> {
-        let status = match self.eval.execute(space, sched, oracle)? {
-            ExecuteStatus::Waiting(notify_token) => RunStatus::Waiting(notify_token),
-            ExecuteStatus::Exited => RunStatus::Exited,
-        };
-        Ok(status)
+        self.eval.execute(space, sched, oracle)
     }
 }

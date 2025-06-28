@@ -10,14 +10,20 @@ use crate::{
     task::Task,
 };
 
+// optimization plan: pack Value into a u64 word. 24 bits for `type_id` and 40
+// bits for `data`. assuming Space alignment >= 8 (or else a 4 byte data can be
+// stored inline), 40 bits address space = 2^(40+3) byte or 8 TB heap space
+
+const _: () = assert!(size_of::<SpaceAddr>() == size_of::<usize>());
+const _: () = assert!(align_of::<SpaceAddr>() == align_of::<usize>());
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
     type_id: TypeId,
-    addr: SpaceAddr,
+    data: usize, // embedded data for inline types, SpaceAddr pointing to actual data for others
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TypeId(u8);
+pub struct TypeId(u32);
 
 impl TypeId {
     pub const VACANT: Self = Self(0);
@@ -31,7 +37,7 @@ impl Default for Value {
     fn default() -> Self {
         Self {
             type_id: TypeId::VACANT,
-            addr: SpaceAddr::MAX,
+            data: SpaceAddr::MAX,
         }
     }
 }
@@ -221,7 +227,7 @@ impl Eval {
                             Closure::new(block, captured.iter().map(|&index| frame.values[index]));
                         let mut closure_value = Value {
                             type_id: TypeId::CLOSURE,
-                            addr: space.typed_alloc::<Closure>(),
+                            data: space.typed_alloc::<Closure>(),
                         };
                         closure_value.store_closure(closure, space)?;
                         frame.values[*dst] = closure_value
@@ -276,7 +282,7 @@ impl Value {
     fn unit() -> Self {
         Self {
             type_id: TypeId::UNIT,
-            addr: SpaceAddr::MAX,
+            data: SpaceAddr::MAX,
         }
     }
 
@@ -293,24 +299,24 @@ impl Value {
         unsafe { space.typed_write(addr, String { buf, len }) }
         Self {
             type_id: TypeId::STRING,
-            addr,
+            data: addr,
         }
     }
 
     fn get_str<'a>(&'a self, space: &'a Space) -> Result<&'a str, TypeError> {
         self.ensure_type(TypeId::STRING)?;
-        let string = unsafe { space.typed_get::<String>(self.addr) };
+        let string = unsafe { space.typed_get::<String>(self.data) };
         Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
     fn get_closure<'a>(&'a self, space: &'a Space) -> Result<&'a Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(unsafe { space.typed_get(self.addr) })
+        Ok(unsafe { space.typed_get(self.data) })
     }
 
     fn store_closure(&mut self, closure: Closure, space: &mut Space) -> Result<(), TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        unsafe { space.typed_write(self.addr, closure) };
+        unsafe { space.typed_write(self.data, closure) };
         Ok(())
     }
 
@@ -319,13 +325,13 @@ impl Value {
         unsafe { space.typed_write(addr, future) };
         Self {
             type_id: TypeId::FUTURE,
-            addr,
+            data: addr,
         }
     }
 
     fn load_future(&self, space: &Space) -> Result<Future, TypeError> {
         self.ensure_type(TypeId::FUTURE)?;
-        Ok(*unsafe { space.typed_get(self.addr) })
+        Ok(*unsafe { space.typed_get(self.data) })
     }
 }
 

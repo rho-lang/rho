@@ -1,4 +1,5 @@
 mod code;
+mod compile;
 mod eval;
 mod oracle;
 mod parse;
