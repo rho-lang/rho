@@ -3,6 +3,7 @@ use crate::{
     oracle::Oracle,
     sched::Sched,
     space::Space,
+    typing::TypeRegistry,
 };
 
 // currently Task is a redundant concept: a Task is no more than a Eval
@@ -26,9 +27,10 @@ impl Task {
     pub fn run(
         &mut self,
         space: &mut Space,
+        registry: &mut TypeRegistry,
         sched: &mut Sched,
         oracle: &mut Oracle,
     ) -> Result<RunStatus, ExecuteError> {
-        self.eval.execute(space, sched, oracle)
+        self.eval.execute(space, registry, sched, oracle)
     }
 }

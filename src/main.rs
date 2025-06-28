@@ -4,6 +4,7 @@ mod eval;
 mod intern;
 mod oracle;
 mod parse;
+mod typing;
 mod sched;
 mod space;
 mod task;

@@ -6,11 +6,13 @@ use crate::{
     sched::{Sched, SchedStatus},
     space::Space,
     task::{RunStatus, Task},
+    typing::TypeRegistry,
 };
 
 pub fn run(main_closure: Closure) {
     let mut tasks = HashMap::new();
     let mut space = Space::new(4 << 10);
+    let mut registry = TypeRegistry::new();
     let mut sched = Sched::new();
     let mut oracle = Oracle::TimerQueue(Default::default());
 
@@ -36,7 +38,7 @@ pub fn run(main_closure: Closure) {
             }
         };
         let task = tasks.get_mut(&task_id).expect("task {task_id} exists");
-        match task.run(&mut space, &mut sched, &mut oracle) {
+        match task.run(&mut space, &mut registry, &mut sched, &mut oracle) {
             Ok(RunStatus::Exited) => {
                 tasks.remove(&task_id);
             }

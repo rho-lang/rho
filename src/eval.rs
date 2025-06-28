@@ -1,4 +1,4 @@
-use std::str;
+use std::{slice, str};
 
 use thiserror::Error;
 
@@ -8,6 +8,7 @@ use crate::{
     sched::{NotifyToken, Sched},
     space::{Space, SpaceAddr},
     task::Task,
+    typing::{RecordLayout, TypeId, TypeRegistry},
 };
 
 // optimization plan: pack Value into a u64 word. 24 bits for `type_id` and 40
@@ -20,17 +21,6 @@ const _: () = assert!(align_of::<SpaceAddr>() == align_of::<usize>());
 pub struct Value {
     type_id: TypeId,
     data: usize, // embedded data for inline types, SpaceAddr pointing to actual data for others
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TypeId(u32);
-
-impl TypeId {
-    pub const VACANT: Self = Self(0);
-    pub const UNIT: Self = Self(1);
-    pub const STRING: Self = Self(2);
-    pub const CLOSURE: Self = Self(3);
-    pub const FUTURE: Self = Self(4);
 }
 
 impl Default for Value {
@@ -166,12 +156,19 @@ pub enum ExecuteError {
     Oracle(#[from] OracleError),
     #[error("{0}")]
     Intrinsic(#[from] intrinsics::Error),
+    #[error("perform record operation on other types")]
+    NotRecord,
+    #[error("unexpected attribute {0}")]
+    UnexpectedAttr(std::string::String),
+    #[error("missing attributes during record initialization")]
+    MissingAttr,
 }
 
 impl Eval {
     pub fn execute(
         &mut self,
         space: &mut Space,
+        registry: &mut TypeRegistry,
         sched: &mut Sched,
         oracle: &mut Oracle,
     ) -> Result<ExecuteStatus, ExecuteError> {
@@ -213,11 +210,18 @@ impl Eval {
                         frame.values[dst] = return_value;
                         continue 'control;
                     }
-                    Instr::Jump(instr_index, None) => {
-                        frame.instr_pointer = *instr_index;
-                        continue 'control;
+                    Instr::Jump(instr_index, cond) => {
+                        if match cond {
+                            None => true,
+                            Some(cond) => {
+                                let target = frame.values[cond.pattern].load_type_id()?;
+                                frame.values[cond.scrutinee].type_id == target
+                            }
+                        } {
+                            frame.instr_pointer = *instr_index;
+                            continue 'control;
+                        }
                     }
-                    Instr::Jump(_, Some(_)) => todo!(),
 
                     Instr::Intrinsic(intrinsic, indexes) => {
                         intrinsic(&mut frame.values, indexes, space, oracle)?
@@ -238,6 +242,33 @@ impl Eval {
                         closure_value.store_closure(closure, space)?;
                         frame.values[*dst] = closure_value
                     }
+                    Instr::MakeFuture(dst) => {
+                        let future = Future(sched.alloc_notify_token());
+                        frame.values[*dst] = Value::alloc_future(future, space)
+                    }
+                    Instr::MakeRecordType(dst, layout) => {
+                        let type_id = registry.add_record_type(layout.clone());
+                        frame.values[*dst] = Value::type_id(type_id)
+                    }
+                    Instr::MakeRecord(dst, type_id, attrs) => {
+                        let type_id = frame.values[*type_id].load_type_id()?;
+                        let Some(RecordLayout(layout)) = registry.get_record_layout(type_id) else {
+                            return Err(ExecuteError::NotRecord);
+                        };
+                        let mut record_attrs = vec![Value::default(); layout.len()];
+                        for (attr, index) in attrs {
+                            let Some(pos) =
+                                layout.iter().position(|layout_attr| layout_attr == attr)
+                            else {
+                                return Err(ExecuteError::UnexpectedAttr("".into())); // TODO
+                            };
+                            record_attrs[pos] = frame.values[*index]
+                        }
+                        if attrs.len() != layout.len() {
+                            return Err(ExecuteError::MissingAttr);
+                        }
+                        frame.values[*dst] = Value::alloc_record(type_id, record_attrs, space)
+                    }
 
                     Instr::Copy(dst, src) => {
                         let src_value = frame.values[*src];
@@ -252,10 +283,6 @@ impl Eval {
                         let mut eval = Self::new();
                         eval.init(frame.values[*closure].load_closure(space)?)?;
                         sched.spawn(Task::new(eval));
-                    }
-                    Instr::MakeFuture(dst) => {
-                        let future = Future(sched.alloc_notify_token());
-                        frame.values[*dst] = Value::alloc_future(future, space)
                     }
                     Instr::Wait(future) => {
                         let Future(notify_token) = frame.values[*future].load_future(space)?;
@@ -288,6 +315,47 @@ impl Value {
             });
         }
         Ok(())
+    }
+
+    fn load_inline(&self) -> u64 {
+        self.data as _
+    }
+
+    fn type_id(type_id: TypeId) -> Self {
+        Self {
+            type_id: TypeId::TYPE_ID,
+            data: type_id.0 as _,
+        }
+    }
+
+    fn load_type_id(&self) -> Result<TypeId, TypeError> {
+        self.ensure_type(TypeId::TYPE_ID)?;
+        Ok(TypeId(self.load_inline() as _))
+    }
+
+    fn alloc_record(type_id: TypeId, attrs: Vec<Value>, space: &mut Space) -> Self {
+        let addr = space.alloc(size_of::<Value>() * attrs.len(), align_of::<Value>());
+        let buf = space
+            .get_mut(addr, size_of::<Value>() * attrs.len())
+            .as_mut_ptr()
+            .cast::<Value>();
+        let record_attrs = unsafe { slice::from_raw_parts_mut(buf, attrs.len()) };
+        for (dst, src) in record_attrs.into_iter().zip(attrs) {
+            *dst = src
+        }
+        Self {
+            type_id,
+            data: addr,
+        }
+    }
+
+    fn get_record<'a>(&'a self, num_attr: usize, space: &'a Space) -> &'a [Value] {
+        let buf = space
+            .get(self.data, size_of::<Value>() * num_attr)
+            .as_ptr()
+            .cast::<Value>();
+        assert!(buf.is_aligned());
+        unsafe { slice::from_raw_parts(buf, num_attr) }
     }
 
     fn unit() -> Self {

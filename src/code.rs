@@ -1,9 +1,9 @@
-use std::sync::Arc;
-
 use crate::{
     eval::{ExecuteError, Value},
+    intern::StringId,
     oracle::Oracle,
     space::Space,
+    typing::RecordLayout,
 };
 
 #[derive(Debug)]
@@ -82,6 +82,11 @@ pub enum Instr {
     MakeString(ValueIndex, String),
     MakeClosure(ValueIndex, Box<Block>, Vec<ValueIndex>), // destination, block, captured values
 
+    MakeRecordType(ValueIndex, RecordLayout),
+    MakeRecord(ValueIndex, ValueIndex, Vec<(StringId, ValueIndex)>),
+
+    MakeFuture(ValueIndex),
+
     // here we have a dedicated instruction for copying captured value. firstly, it
     // simplifies the implementation of compilation. secondly, captured values are
     // not on stack at the first place; they reside as closure's property. a lazy
@@ -95,7 +100,6 @@ pub enum Instr {
     Return(ValueIndex),
 
     Spawn(ValueIndex),
-    MakeFuture(ValueIndex),
     Wait(ValueIndex),
     Notify(ValueIndex),
 
