@@ -260,7 +260,7 @@ impl Eval {
                             let Some(pos) =
                                 layout.iter().position(|layout_attr| layout_attr == attr)
                             else {
-                                return Err(ExecuteError::UnexpectedAttr("".into())); // TODO
+                                return Err(ExecuteError::UnexpectedAttr("TODO".into()));
                             };
                             record_attrs[pos] = frame.values[*index]
                         }
@@ -278,6 +278,22 @@ impl Eval {
                         assert!(*index < unsafe { &*frame.closure.block }.num_captured);
                         frame.values[*dst] = frame.closure.captured[*index]
                     }
+
+                    Instr::GetAttr(dst, record, attr) => {
+                        let record_value = &frame.values[*record];
+                        let Some(RecordLayout(layout)) =
+                            registry.get_record_layout(record_value.type_id)
+                        else {
+                            return Err(ExecuteError::NotRecord);
+                        };
+                        let Some(pos) = layout.iter().position(|layout_attr| layout_attr == attr)
+                        else {
+                            return Err(ExecuteError::UnexpectedAttr("TODO".into()));
+                        };
+                        let value = record_value.get_record(layout.len(), space)[pos];
+                        frame.values[*dst] = value
+                    }
+                    Instr::SetAttr(..) => todo!(),
 
                     Instr::Spawn(closure) => {
                         let mut eval = Self::new();
@@ -340,7 +356,7 @@ impl Value {
             .as_mut_ptr()
             .cast::<Value>();
         let record_attrs = unsafe { slice::from_raw_parts_mut(buf, attrs.len()) };
-        for (dst, src) in record_attrs.into_iter().zip(attrs) {
+        for (dst, src) in record_attrs.iter_mut().zip(attrs) {
             *dst = src
         }
         Self {

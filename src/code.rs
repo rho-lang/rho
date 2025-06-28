@@ -95,6 +95,9 @@ pub enum Instr {
     Copy(ValueIndex, ValueIndex),
     CopyCaptured(ValueIndex, usize),
 
+    GetAttr(ValueIndex, ValueIndex, StringId), // #0 <- #1.#2
+    SetAttr(ValueIndex, StringId, ValueIndex), // #0.#1 <- #2
+
     Call(ValueIndex, ValueIndex, Vec<ValueIndex>), // destination, closure, arguments
     Jump(InstrIndex, Option<instr::Match>),
     Return(ValueIndex),
