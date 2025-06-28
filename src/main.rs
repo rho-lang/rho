@@ -1,6 +1,7 @@
 mod code;
 mod compile;
 mod eval;
+mod intern;
 mod oracle;
 mod parse;
 mod sched;

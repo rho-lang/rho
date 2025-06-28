@@ -57,6 +57,7 @@ pub struct TimerQueue {
 type TimerId = u64;
 
 impl TimerQueue {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self::default()
     }
