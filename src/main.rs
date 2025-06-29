@@ -13,8 +13,7 @@ mod worker;
 use std::error::Error;
 
 use crate::{
-    asset::Asset, code::instr::Intrinsic, compile::Compile, eval::intrinsics, parse::Source,
-    typing::TypeRegistry,
+    code::instr::Intrinsic, compile::Compile, eval::intrinsics, parse::Source, typing::TypeRegistry,
 };
 
 const SOURCE: &str = r#"
@@ -36,14 +35,13 @@ intrinsic trace ("[main] wait finish")
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
-    let mut asset = Asset::new();
+    let mut compile = Compile::new();
     let mut registry = TypeRegistry::new();
-    registry.preload(&mut asset);
+    registry.preload(&mut compile.asset);
 
     let source = SOURCE.parse::<Source>()?;
     println!("{source:?}");
 
-    let mut compile = Compile::new();
     compile.intrinsics = [
         ("trace", intrinsics::trace as Intrinsic),
         ("notify_after", intrinsics::notify_after),
@@ -52,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     .map(|(s, f)| (s.into(), f))
     .into();
     compile.input(source.stmts)?;
-    let prog = compile.finish();
+    let (prog, asset) = compile.finish();
 
     worker::run(prog, registry, &asset);
     unsafe { prog.drop_main() }

@@ -48,7 +48,7 @@ impl TypeRegistry {
         }
     }
 
-    pub fn preload(&mut self, asset: &mut Asset) {
+    pub fn preload(&mut self, _asset: &mut Asset) {
         self.record_layouts = [
             // do we need to insert layouts for zero sized record types?
             (TypeId::UNIT, RecordLayout(vec![])),

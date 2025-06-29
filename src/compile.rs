@@ -16,7 +16,7 @@ use crate::{
 #[derive(Default)]
 pub struct Compile {
     pub intrinsics: HashMap<String, Intrinsic>,
-    pub string_pool: Asset,
+    pub asset: Asset,
 
     main: Vec<Instr>,
     main_num_value: usize,
@@ -50,10 +50,10 @@ impl Compile {
         Self::default()
     }
 
-    pub fn finish(mut self) -> Closure {
+    pub fn finish(mut self) -> (Closure, Asset) {
         self.main.push(Instr::MakeUnit(0));
         self.main.push(Instr::Return(0));
-        Closure::main(self.main, self.main_num_value)
+        (Closure::main(self.main, self.main_num_value), self.asset)
     }
 }
 

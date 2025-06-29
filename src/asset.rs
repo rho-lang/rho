@@ -9,6 +9,7 @@ pub struct Asset {
 }
 
 impl Asset {
+    #[allow(unused)]
     pub fn new() -> Self {
         Self::default()
     }
