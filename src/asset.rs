@@ -3,28 +3,28 @@ use std::collections::HashMap;
 pub type StringId = u32;
 
 #[derive(Debug, Default)]
-pub struct StringPool {
-    map: HashMap<String, StringId>,
+pub struct Asset {
+    string_ids: HashMap<String, StringId>,
     strings: Vec<String>,
 }
 
-impl StringPool {
+impl Asset {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn intern(&mut self, s: String) -> StringId {
-        if let Some(&id) = self.map.get(&s) {
+        if let Some(&id) = self.string_ids.get(&s) {
             id
         } else {
             let string_id = self.strings.len() as _;
             self.strings.push(s.clone());
-            self.map.insert(s, string_id);
+            self.string_ids.insert(s, string_id);
             string_id
         }
     }
 
-    pub fn get(&self, id: StringId) -> &str {
+    pub fn get_string(&self, id: StringId) -> &str {
         &self.strings[id as usize]
     }
 }

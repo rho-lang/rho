@@ -6,17 +6,17 @@ use std::{
 use thiserror::Error;
 
 use crate::{
+    asset::Asset,
     code::{
         Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic,
     },
     eval::Closure,
-    intern::StringPool,
 };
 
 #[derive(Default)]
 pub struct Compile {
     pub intrinsics: HashMap<String, Intrinsic>,
-    pub string_pool: StringPool,
+    pub string_pool: Asset,
 
     main: Vec<Instr>,
     main_num_value: usize,

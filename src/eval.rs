@@ -3,6 +3,7 @@ use std::{slice, str};
 use thiserror::Error;
 
 use crate::{
+    asset::Asset,
     code::{Block, CaptureSource, Instr, InstrIndex},
     oracle::{Oracle, OracleError},
     sched::{NotifyToken, Sched},
@@ -173,6 +174,7 @@ impl Eval {
         registry: &mut TypeRegistry,
         sched: &mut Sched,
         oracle: &mut Oracle,
+        asset: &Asset,
     ) -> Result<ExecuteStatus, ExecuteError> {
         // the contract here is `execute` should only be called after calling `init`,
         // and should not be called again after returning Exited
@@ -335,7 +337,9 @@ impl Eval {
                         };
                         let Some(pos) = layout.iter().position(|layout_attr| layout_attr == attr)
                         else {
-                            return Err(ExecuteError::UnexpectedAttr("TODO".into()));
+                            return Err(ExecuteError::UnexpectedAttr(
+                                asset.get_string(*attr).into(),
+                            ));
                         };
                         frame.values[*dst] =
                             unsafe { load_record_attr(space, record_value.data, pos) }
@@ -349,7 +353,9 @@ impl Eval {
                         };
                         let Some(pos) = layout.iter().position(|layout_attr| layout_attr == attr)
                         else {
-                            return Err(ExecuteError::UnexpectedAttr("TODO".into()));
+                            return Err(ExecuteError::UnexpectedAttr(
+                                asset.get_string(*attr).into(),
+                            ));
                         };
                         unsafe {
                             store_record_attr(space, record_value.data, pos, frame.values[*index])

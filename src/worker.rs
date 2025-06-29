@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    asset::Asset,
     eval::{Closure, Eval},
     oracle::Oracle,
     sched::{Sched, SchedStatus},
@@ -9,10 +10,9 @@ use crate::{
     typing::TypeRegistry,
 };
 
-pub fn run(main_closure: Closure) {
+pub fn run(main_closure: Closure, mut registry: TypeRegistry, asset: &Asset) {
     let mut tasks = HashMap::new();
     let mut space = Space::new(4 << 10);
-    let mut registry = TypeRegistry::new();
     let mut sched = Sched::new();
     let mut oracle = Oracle::TimerQueue(Default::default());
 
@@ -38,7 +38,7 @@ pub fn run(main_closure: Closure) {
             }
         };
         let task = tasks.get_mut(&task_id).expect("task {task_id} exists");
-        match task.run(&mut space, &mut registry, &mut sched, &mut oracle) {
+        match task.run(&mut space, &mut registry, &mut sched, &mut oracle, &asset) {
             Ok(RunStatus::Exited) => {
                 tasks.remove(&task_id);
             }

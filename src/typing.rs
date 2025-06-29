@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::intern::{StringId, StringPool};
+use crate::asset::{Asset, StringId};
 
 #[derive(Debug, Clone)]
 pub struct RecordLayout(pub Vec<StringId>);
@@ -28,6 +28,7 @@ impl TypeId {
     pub const RESERVED_MAX: Self = Self(100);
 }
 
+#[derive(Debug, Clone)]
 pub struct TypeRegistry {
     type_id: TypeId,
     record_layouts: HashMap<TypeId, RecordLayout>,
@@ -47,7 +48,7 @@ impl TypeRegistry {
         }
     }
 
-    pub fn preload(&mut self, string_pool: &mut StringPool) {
+    pub fn preload(&mut self, asset: &mut Asset) {
         self.record_layouts = [
             // do we need to insert layouts for zero sized record types?
             (TypeId::UNIT, RecordLayout(vec![])),

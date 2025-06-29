@@ -1,4 +1,5 @@
 use crate::{
+    asset::Asset,
     eval::{Eval, ExecuteError},
     oracle::Oracle,
     sched::Sched,
@@ -30,7 +31,8 @@ impl Task {
         registry: &mut TypeRegistry,
         sched: &mut Sched,
         oracle: &mut Oracle,
+        asset: &Asset,
     ) -> Result<RunStatus, ExecuteError> {
-        self.eval.execute(space, registry, sched, oracle)
+        self.eval.execute(space, registry, sched, oracle, asset)
     }
 }

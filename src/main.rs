@@ -1,7 +1,7 @@
+mod asset;
 mod code;
 mod compile;
 mod eval;
-mod intern;
 mod oracle;
 mod parse;
 mod sched;
@@ -12,7 +12,10 @@ mod worker;
 
 use std::error::Error;
 
-use crate::{code::instr::Intrinsic, compile::Compile, eval::intrinsics, parse::Source};
+use crate::{
+    asset::Asset, code::instr::Intrinsic, compile::Compile, eval::intrinsics, parse::Source,
+    typing::TypeRegistry,
+};
 
 const SOURCE: &str = r#"
 let fut1 = future
@@ -33,8 +36,13 @@ intrinsic trace ("[main] wait finish")
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
+    let mut asset = Asset::new();
+    let mut registry = TypeRegistry::new();
+    registry.preload(&mut asset);
+
     let source = SOURCE.parse::<Source>()?;
     println!("{source:?}");
+
     let mut compile = Compile::new();
     compile.intrinsics = [
         ("trace", intrinsics::trace as Intrinsic),
@@ -45,7 +53,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     .into();
     compile.input(source.stmts)?;
     let prog = compile.finish();
-    worker::run(prog);
+
+    worker::run(prog, registry, &asset);
     unsafe { prog.drop_main() }
     Ok(())
 }
