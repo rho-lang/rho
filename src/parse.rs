@@ -6,8 +6,8 @@ use crate::code::{Expr, Func, Literal, Stmt, syntax::Intrinsic};
 
 #[derive(Debug, Default)]
 pub struct Source {
-    inputs: Vec<String>,
-    stmts: Vec<Stmt>,
+    pub inputs: Vec<String>,
+    pub stmts: Vec<Stmt>,
 }
 
 #[derive(Debug, Error)]

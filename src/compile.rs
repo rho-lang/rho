@@ -9,20 +9,23 @@ use crate::{
     code::{
         Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic,
     },
+    eval::Closure,
     intern::StringPool,
 };
 
+#[derive(Default)]
 pub struct Compile {
-    main: Vec<Instr>,
-    packages: HashMap<String, Package>,
+    pub intrinsics: HashMap<String, Intrinsic>,
+    pub string_pool: StringPool,
 
+    main: Vec<Instr>,
+    main_num_value: usize,
+
+    packages: HashMap<String, Package>,
     current_package_name: String,
     current_package: Package,
     current_block: CompileBlock,
     current_outer_blocks: Vec<CompileBlock>,
-
-    intrinsics: HashMap<String, Intrinsic>,
-    pub string_pool: StringPool,
 }
 
 #[derive(Default)]
@@ -30,7 +33,7 @@ struct CompileBlock {
     instrs: Vec<Instr>,
     promoted_indexes: HashSet<ValueIndex>,
     expr_index: ValueIndex,
-    max_index: ValueIndex,
+    num_value: ValueIndex,
     scopes: Vec<HashMap<String, ValueIndex>>,
     loop_jump_targets: Vec<InstrIndex>,
     // to be translated into Capture instructions
@@ -40,6 +43,18 @@ struct CompileBlock {
 #[derive(Default)]
 struct Package {
     exports: HashMap<String, ValueIndex>,
+}
+
+impl Compile {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn finish(mut self) -> Closure {
+        self.main.push(Instr::MakeUnit(0));
+        self.main.push(Instr::Return(0));
+        Closure::main(self.main, self.main_num_value)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -60,12 +75,15 @@ pub enum CompileError {
 
 impl Compile {
     pub fn input(&mut self, stmts: Vec<Stmt>) -> Result<(), CompileError> {
+        self.current_block.scopes.push(Default::default());
         for stmt in stmts {
             self.input_stmt(stmt)?
         }
 
         assert!(self.current_outer_blocks.is_empty());
-        self.main.extend(take(&mut self.current_block).instrs);
+        let block = take(&mut self.current_block);
+        self.main.extend(block.instrs);
+        self.main_num_value = self.main_num_value.max(block.num_value);
 
         let mut package_name = take(&mut self.current_package_name);
         if package_name.is_empty() {
@@ -81,6 +99,9 @@ impl Compile {
         }
     }
 
+    // convention: input_stmt `add` instruction(s) that use values indexed from
+    // `self.current_block.expr_index` onward as scratch pad. after input_stmt
+    // returns, `self.current_block.expr_index` >= the point it was called
     fn input_stmt(&mut self, stmt: Stmt) -> Result<(), CompileError> {
         match stmt {
             Stmt::Package(name) => {
@@ -129,21 +150,22 @@ impl Compile {
                 let Some(&native_fn) = self.intrinsics.get(&intrinsic.id) else {
                     return Err(CompileError::UnknownIntrinsic(intrinsic.id));
                 };
+                let num_dst_id = intrinsic.dst_ids.len();
+                let num_arg = intrinsic.args.len();
+
                 let expr_index = self.current_block.expr_index;
-                self.current_block.expr_index += intrinsic.dst_ids.len();
                 // first evaluate arguments without destination ids in scope
-                for expr in intrinsic.args {
-                    self.input_expr(expr)?;
-                    self.current_block.expr_index += 1
+                for (i, expr) in intrinsic.args.into_iter().enumerate() {
+                    self.current_block.expr_index = expr_index + num_dst_id + i;
+                    self.input_expr(expr)?
                 }
-                for (index, id) in intrinsic.dst_ids.into_iter().enumerate() {
-                    self.bind(id, expr_index + index)
+                for (i, id) in intrinsic.dst_ids.into_iter().enumerate() {
+                    self.bind(id, expr_index + i)
                 }
                 self.add(Instr::Intrinsic(
                     native_fn,
-                    (expr_index..self.current_block.expr_index).collect(),
-                ));
-                self.current_block.expr_index = expr_index
+                    (expr_index..expr_index + num_dst_id + num_arg).collect(),
+                ))
             }
 
             Stmt::Return(expr) => {
@@ -176,30 +198,41 @@ impl Compile {
         Ok(())
     }
 
+    // convention: input_expr `add` instruction(s) that produce expression's value
+    // at `self.current_block.expr_index` at the point input_expr is called. when
+    // input_expr returns, `self.current_block.expr_index` >= when it was called
     fn input_expr(&mut self, expr: Expr) -> Result<(), CompileError> {
         let expr_index = self.current_block.expr_index;
-        self.current_block.max_index = self.current_block.max_index.max(expr_index + 1);
+        self.current_block.num_value = self.current_block.num_value.max(expr_index + 1);
         match expr {
             Expr::Import(_, _) => todo!(),
 
             Expr::Literal(Literal::Func(func)) => {
+                let num_param = func.params.len();
+
                 self.current_outer_blocks
                     .push(take(&mut self.current_block));
-                let num_param = func.params.len();
-                for id in func.params {
-                    self.bind(id, self.current_block.expr_index);
-                    self.current_block.expr_index += 1
+                // start to work on a nested current block. nest the code as a visual
+                // implication (without any real functionality)
+                {
+                    self.current_block.scopes.push(Default::default());
+                    for id in func.params {
+                        self.bind(id, self.current_block.expr_index);
+                        self.current_block.expr_index += 1
+                    }
+                    let expr_index = self.current_block.expr_index;
+                    self.input_expr(*func.body)?;
+                    self.add(Instr::Return(expr_index));
                 }
-                self.input_expr(*func.body)?;
-
                 let func_block = replace(
                     &mut self.current_block,
                     self.current_outer_blocks.pop().unwrap(),
                 );
+
                 let block = Block {
                     name: "TODO".into(),
                     num_param,
-                    num_value: func_block.max_index,
+                    num_value: func_block.num_value,
                     instrs: func_block.instrs,
                 };
                 self.add(Instr::MakeClosure(expr_index, block.into()));
@@ -214,14 +247,15 @@ impl Compile {
             }
             Expr::Call(closure, args) => {
                 self.input_expr(*closure)?;
-                for arg in args {
-                    self.current_block.expr_index += 1;
+                let num_arg = args.len();
+                for (i, arg) in args.into_iter().enumerate() {
+                    self.current_block.expr_index = expr_index + 1 + i;
                     self.input_expr(arg)?
                 }
                 self.add(Instr::Call(
                     expr_index,
                     expr_index,
-                    (expr_index + 1..=self.current_block.expr_index).collect(),
+                    (expr_index + 1..=expr_index + num_arg).collect(),
                 ))
             }
 
@@ -243,7 +277,9 @@ impl Compile {
                 for stmt in stmts {
                     self.input_stmt(stmt)?
                 }
+                let value_index = self.current_block.expr_index;
                 self.input_expr(*expr)?;
+                self.add(Instr::Copy(expr_index, value_index));
                 self.current_block.scopes.pop().unwrap();
             }
 
@@ -291,6 +327,9 @@ impl Compile {
             }
         }
 
+        if self.current_outer_blocks.is_empty() {
+            return None;
+        }
         let index = self.current_outer_blocks.len() - 1;
         let source = Self::try_capture_impl(id, &mut self.current_outer_blocks, index)?;
 
