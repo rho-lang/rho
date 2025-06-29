@@ -31,8 +31,8 @@ struct CompileBlock {
     num_value: ValueIndex,
     scopes: Vec<HashMap<String, ValueIndex>>,
     loop_jump_targets: Vec<InstrIndex>,
-    // to be translated into Capture instructions
-    captures: Vec<(String, CaptureSource)>,
+    captures: Vec<(String, CaptureSource)>, // to be translated into Capture instructions
+    closure_name_hint: String,
 }
 
 #[derive(Default)]
@@ -186,7 +186,9 @@ impl Compile {
                 self.add(Instr::Spawn(self.current_block.expr_index))
             }
             Stmt::Bind(id, expr) => {
+                self.current_block.closure_name_hint = id.clone();
                 self.input_expr(expr, asset)?;
+                self.current_block.closure_name_hint.clear();
                 self.bind(id, self.current_block.expr_index);
                 self.current_block.expr_index += 1;
             }
@@ -230,8 +232,12 @@ impl Compile {
                     self.current_outer_blocks.pop().unwrap(),
                 );
 
+                let mut name = take(&mut self.current_block.closure_name_hint);
+                if name.is_empty() {
+                    name = "(unnamed)".into()
+                }
                 let block = Block {
-                    name: "TODO".into(),
+                    name,
                     num_param,
                     num_value: func_block.num_value,
                     instrs: func_block.instrs,
