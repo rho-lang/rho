@@ -10,42 +10,28 @@ mod task;
 mod typing;
 mod worker;
 
-use std::error::Error;
+use std::{env::args, error::Error, fs::read_to_string, path::Path};
 
 use crate::{
-    asset::Asset, compile::Compile, eval::intrinsics, parse::Source, typing::TypeRegistry,
+    asset::Asset,
+    compile::Compile,
+    eval::{Closure, intrinsics},
+    parse::Source,
+    typing::TypeRegistry,
 };
-
-const SOURCE: &str = r#"
-let fut1 = future
-let simple = func() {
-    intrinsic trace ("[simple] start")
-    let fut2 = future
-    intrinsic notify_after (fut2, "10ms")
-    wait fut2
-    notify fut1
-    intrinsic trace ("[simple] notified")
-}
-spawn simple
-intrinsic trace ("[main] spawned")
-wait fut1
-intrinsic trace ("[main] wait finish")
-"#;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
     let mut registry = TypeRegistry::new();
-    let mut compile = Compile::new();
-
-    let source = SOURCE.parse::<Source>()?;
-    println!("{source:?}");
-
     let mut asset = Asset::new();
     registry.preload(&mut asset);
     intrinsics::preload(&mut asset);
-    compile.input(source.stmts, &mut asset)?;
-    let prog = compile.finish(&mut asset);
+
+    let Some(source) = args().nth(1) else {
+        return Err("source is not specified".into());
+    };
+    let prog = compile_sources(Path::new(&source), &mut asset)?;
 
     for block_id in 0..=prog.block_id {
         println!("{}", asset.display_block(block_id))
@@ -53,4 +39,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     worker::run(prog, registry, &asset);
     Ok(())
+}
+
+fn compile_sources(path: &Path, asset: &mut Asset) -> Result<Closure, Box<dyn Error>> {
+    fn walk(path: &Path, compile: &mut Compile, asset: &mut Asset) -> Result<(), Box<dyn Error>> {
+        let source = read_to_string(path)?.parse::<Source>()?;
+        for input in source.inputs {
+            let input = Path::new(&input);
+            if input.is_file() {
+                walk(input, compile, asset)?
+            } else {
+                todo!()
+            }
+        }
+        compile.input(source.stmts, asset)?;
+        Ok(())
+    }
+
+    let mut compile = Compile::new();
+    walk(path, &mut compile, asset)?;
+    Ok(compile.finish(asset))
 }
