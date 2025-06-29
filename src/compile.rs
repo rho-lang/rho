@@ -261,7 +261,7 @@ impl Compile {
                 let block_id = asset.add_block(block);
                 self.add(Instr::MakeClosure(expr_index, block_id));
                 for (_, capture_source) in func_block.captures {
-                    if let &CaptureSource::Owning(index) = &capture_source
+                    if let &CaptureSource::Original(index) = &capture_source
                         && self.current_block.promoted_indexes.insert(index)
                     {
                         self.add(Instr::Promote(index))
@@ -368,7 +368,7 @@ impl Compile {
         index: usize,
     ) -> Option<CaptureSource> {
         if let Some(value_index) = Self::var_impl(id, &outer_blocks[index]) {
-            return Some(CaptureSource::Owning(value_index));
+            return Some(CaptureSource::Original(value_index));
         }
 
         for (captured_index, (captured_id, _)) in outer_blocks[index].captures.iter().enumerate() {

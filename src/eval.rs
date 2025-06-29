@@ -166,8 +166,8 @@ impl Eval {
         // the contract here is `execute` should only be called after calling `init`,
         // and should not be called again after returning Exited
         let mut frame = self.frames.last_mut().expect("last frame exists");
-        let block = asset.get_block(frame.closure.block_id);
         'control: loop {
+            let block = asset.get_block(frame.closure.block_id);
             // optimize for sequentially execute instructions
             for instr in &block.instrs[frame.instr_pointer..] {
                 tracing::trace!(%frame.instr_pointer, %block.name, ?instr, "execute");
@@ -221,7 +221,7 @@ impl Eval {
                     }
                     Instr::Capture(dst, source) => {
                         let addr = match source {
-                            CaptureSource::Owning(index) => {
+                            CaptureSource::Original(index) => {
                                 let captured_value = frame.values[*index];
                                 captured_value.ensure_type(TypeId::CELL).unwrap();
                                 captured_value.data

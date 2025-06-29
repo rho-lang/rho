@@ -119,7 +119,7 @@ pub enum Instr {
 
 #[derive(Debug)]
 pub enum CaptureSource {
-    Owning(ValueIndex),
+    Original(ValueIndex),
     Transitive(usize),
 }
 

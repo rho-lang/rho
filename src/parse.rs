@@ -79,10 +79,28 @@ fn parse_directive(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
             return method(s);
         }
     }
-    Ok(vec![Stmt::Expr(parse_expr(s)?)])
+    let expr = parse_expr(s)?;
+    let stmt = if let Expr::Var(id) = &expr
+        && let Some(rest) = trim(s).strip_prefix('=')
+    {
+        *s = trim(rest);
+        Stmt::Mutate(id.into(), parse_expr(s)?)
+    } else {
+        Stmt::Expr(expr)
+    };
+    Ok(vec![stmt])
 }
 
 fn parse_expr(s: &mut &str) -> Result<Expr, ParseError> {
+    let mut expr = parse_atomic_expr(s)?;
+    while let Some(rest) = trim(s).strip_prefix('(') {
+        *s = trim(rest);
+        expr = parse_call(s, expr)?
+    }
+    Ok(expr)
+}
+
+fn parse_atomic_expr(s: &mut &str) -> Result<Expr, ParseError> {
     for (prefix, method) in [
         (
             "{",
@@ -229,6 +247,12 @@ fn parse_match(_: &mut &str) -> Result<Expr, ParseError> {
 
 fn parse_var(s: &mut &str) -> Result<Expr, ParseError> {
     Ok(Expr::Var(extract_identifier(s)?.into()))
+}
+
+fn parse_call(s: &mut &str, closure: Expr) -> Result<Expr, ParseError> {
+    let args = extract_args(s);
+    *s = consume(trim(s), ')', "closing parenthesis of argument list")?;
+    Ok(Expr::Call(closure.into(), args))
 }
 
 // helpers
