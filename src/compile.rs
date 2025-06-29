@@ -112,6 +112,7 @@ impl Compile {
     // `self.current_block.expr_index` onward as scratch pad. after input_stmt
     // returns, `self.current_block.expr_index` >= the point it was called
     fn input_stmt(&mut self, stmt: Stmt, asset: &mut Asset) -> Result<(), CompileError> {
+        let expr_index = self.current_block.expr_index;
         match stmt {
             Stmt::Package(name) => {
                 let replaced = replace(&mut self.current_package_name, name);
@@ -177,7 +178,6 @@ impl Compile {
                 let num_dst_id = intrinsic.dst_ids.len();
                 let num_arg = intrinsic.args.len();
 
-                let expr_index = self.current_block.expr_index;
                 // first evaluate arguments without destination ids in scope
                 for (i, expr) in intrinsic.args.into_iter().enumerate() {
                     self.current_block.expr_index = expr_index + num_dst_id + i;
@@ -201,7 +201,6 @@ impl Compile {
             }
             Stmt::Mutate(id, expr) => {
                 self.current_block.closure_name_hint = id.clone();
-                let expr_index = self.current_block.expr_index;
                 self.input_expr(expr, asset)?;
                 self.current_block.closure_name_hint.clear();
                 // i wanted to do one self.add... but hold back myself so i can use multiple
@@ -221,19 +220,19 @@ impl Compile {
 
             Stmt::Return(expr) => {
                 self.input_expr(expr, asset)?;
-                self.add(Instr::Return(self.current_block.expr_index))
+                self.add(Instr::Return(expr_index))
             }
             Stmt::Wait(expr) => {
                 self.input_expr(expr, asset)?;
-                self.add(Instr::Wait(self.current_block.expr_index))
+                self.add(Instr::Wait(expr_index))
             }
             Stmt::Notify(expr) => {
                 self.input_expr(expr, asset)?;
-                self.add(Instr::Notify(self.current_block.expr_index))
+                self.add(Instr::Notify(expr_index))
             }
             Stmt::Spawn(expr) => {
                 self.input_expr(expr, asset)?;
-                self.add(Instr::Spawn(self.current_block.expr_index))
+                self.add(Instr::Spawn(expr_index))
             }
             Stmt::Expr(expr) => self.input_expr(expr, asset)?,
         }
