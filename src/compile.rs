@@ -169,6 +169,33 @@ impl Compile {
                 ))
             }
 
+            Stmt::Bind(id, expr) => {
+                self.current_block.closure_name_hint = id.clone();
+                self.input_expr(expr, asset)?;
+                self.current_block.closure_name_hint.clear();
+                self.bind(id, self.current_block.expr_index);
+                self.current_block.expr_index += 1;
+            }
+            Stmt::Mutate(id, expr) => {
+                self.current_block.closure_name_hint = id.clone();
+                let expr_index = self.current_block.expr_index;
+                self.input_expr(expr, asset)?;
+                self.current_block.closure_name_hint.clear();
+                // i wanted to do one self.add... but hold back myself so i can use multiple
+                // instructions in some branches in the future
+                if let Some(value_index) = self.var(&id) {
+                    if !self.current_block.promoted_indexes.contains(&value_index) {
+                        self.add(Instr::Copy(value_index, expr_index))
+                    } else {
+                        self.add(Instr::SetPromoted(value_index, expr_index))
+                    }
+                } else if let Some(captured_index) = self.try_capture(&id) {
+                    self.add(Instr::SetCaptured(captured_index, expr_index))
+                } else {
+                    return Err(CompileError::UnknownVariable(id));
+                }
+            }
+
             Stmt::Return(expr) => {
                 self.input_expr(expr, asset)?;
                 self.add(Instr::Return(self.current_block.expr_index))
@@ -185,18 +212,7 @@ impl Compile {
                 self.input_expr(expr, asset)?;
                 self.add(Instr::Spawn(self.current_block.expr_index))
             }
-            Stmt::Bind(id, expr) => {
-                self.current_block.closure_name_hint = id.clone();
-                self.input_expr(expr, asset)?;
-                self.current_block.closure_name_hint.clear();
-                self.bind(id, self.current_block.expr_index);
-                self.current_block.expr_index += 1;
-            }
-
             Stmt::Expr(expr) => self.input_expr(expr, asset)?,
-            // memo for compiling mutation
-            // three cases. mutating owning plain value: just Copy. mutating promoted value:
-            // SetPromoted. mutating captured value: SetCaptured
         }
         Ok(())
     }

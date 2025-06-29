@@ -21,8 +21,11 @@ pub enum Stmt {
     Spawn(Expr),
 
     Bind(String, Expr),
+    Mutate(String, Expr),
+
     Package(String),
     Export(String),
+
     Intrinsic(syntax::Intrinsic),
 }
 
