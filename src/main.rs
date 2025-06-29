@@ -15,9 +15,7 @@ use std::error::Error;
 use crate::{
     code::{Block, CaptureSource, Instr},
     eval::{Closure, intrinsics},
-    intern::StringId,
     parse::Source,
-    typing::RecordLayout,
 };
 
 const SOURCE: &str = r#"
@@ -66,7 +64,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Instr::MakeFuture(0),
             Instr::MakeClosure(1, simple.into()),
             Instr::Promote(0),
-            Instr::Capture(1, CaptureSource::Value(0)),
+            Instr::Capture(1, CaptureSource::Owning(0)),
             Instr::Spawn(1),
             Instr::MakeString(1, "[main] spawned".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),

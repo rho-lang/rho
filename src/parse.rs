@@ -67,7 +67,7 @@ fn parse_directive(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
         ("break", |_| Ok(vec![Stmt::Break])),
         ("continue", |_| Ok(vec![Stmt::Continue])),
         ("intrinsic", parse_intrinsic),
-        ("let", parse_assign),
+        ("let", parse_let),
         ("loop", parse_loop),
         ("notify", parse_notify),
         ("return", parse_return),
@@ -142,10 +142,10 @@ fn parse_intrinsic(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     Ok(vec![Stmt::Intrinsic(Intrinsic { id, dst_ids, args })])
 }
 
-fn parse_assign(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
+fn parse_let(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     let id = extract_identifier(s)?;
-    *s = consume(trim(s), '=', "\"=\" in assignment")?;
-    Ok(vec![Stmt::Assign(id.into(), parse_expr(s)?)])
+    *s = consume(trim(s), '=', "\"=\" in let binding")?;
+    Ok(vec![Stmt::Bind(id.into(), parse_expr(s)?)])
 }
 
 fn parse_loop(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {

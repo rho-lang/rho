@@ -1,13 +1,15 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     mem::{replace, take},
 };
 
 use thiserror::Error;
 
 use crate::{
-    code::{Block, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic},
-    intern::{StringId, StringPool},
+    code::{
+        Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic,
+    },
+    intern::StringPool,
 };
 
 pub struct Compile {
@@ -26,11 +28,13 @@ pub struct Compile {
 #[derive(Default)]
 struct CompileBlock {
     instrs: Vec<Instr>,
+    promoted_indexes: HashSet<ValueIndex>,
     expr_index: ValueIndex,
     max_index: ValueIndex,
     scopes: Vec<HashMap<String, ValueIndex>>,
     loop_jump_targets: Vec<InstrIndex>,
-    captures: HashMap<StringId, ValueIndex>, // indexes into stack of outer CompileBlock
+    // to be translated into Capture instructions
+    captures: Vec<(String, CaptureSource)>,
 }
 
 #[derive(Default)]
@@ -50,6 +54,8 @@ pub enum CompileError {
     OrphanContinue,
     #[error("unknown intrinsic: {0}")]
     UnknownIntrinsic(String),
+    #[error("unknown variable: {0}")]
+    UnknownVariable(String),
 }
 
 impl Compile {
@@ -131,7 +137,7 @@ impl Compile {
                     self.current_block.expr_index += 1
                 }
                 for (index, id) in intrinsic.dst_ids.into_iter().enumerate() {
-                    self.assign(id, expr_index + index)
+                    self.bind(id, expr_index + index)
                 }
                 self.add(Instr::Intrinsic(
                     native_fn,
@@ -156,30 +162,34 @@ impl Compile {
                 self.input_expr(expr)?;
                 self.add(Instr::Spawn(self.current_block.expr_index))
             }
-            Stmt::Assign(id, expr) => {
+            Stmt::Bind(id, expr) => {
                 self.input_expr(expr)?;
-                self.assign(id, self.current_block.expr_index);
-                self.current_block.expr_index += 1
+                self.bind(id, self.current_block.expr_index);
+                self.current_block.expr_index += 1;
             }
 
             Stmt::Expr(expr) => self.input_expr(expr)?,
+            // memo for compiling mutation
+            // three cases. mutating owning plain value: just Copy. mutating promoted value:
+            // SetPromoted. mutating captured value: SetCaptured
         }
         Ok(())
     }
 
     fn input_expr(&mut self, expr: Expr) -> Result<(), CompileError> {
         let expr_index = self.current_block.expr_index;
+        self.current_block.max_index = self.current_block.max_index.max(expr_index + 1);
         match expr {
+            Expr::Import(_, _) => todo!(),
+
             Expr::Literal(Literal::Func(func)) => {
                 self.current_outer_blocks
                     .push(take(&mut self.current_block));
                 let num_param = func.params.len();
-                // save index 0 for captured
                 for id in func.params {
-                    self.current_block.expr_index += 1;
-                    self.assign(id, self.current_block.expr_index)
+                    self.bind(id, self.current_block.expr_index);
+                    self.current_block.expr_index += 1
                 }
-                self.current_block.expr_index += 1;
                 self.input_expr(*func.body)?;
 
                 let func_block = replace(
@@ -189,10 +199,18 @@ impl Compile {
                 let block = Block {
                     name: "TODO".into(),
                     num_param,
-                    num_value: func_block.max_index + 1,
+                    num_value: func_block.max_index,
                     instrs: func_block.instrs,
                 };
-                // self.add(Instr::MakeRecordType((), ()))
+                self.add(Instr::MakeClosure(expr_index, block.into()));
+                for (_, capture_source) in func_block.captures {
+                    if let &CaptureSource::Owning(index) = &capture_source
+                        && self.current_block.promoted_indexes.insert(index)
+                    {
+                        self.add(Instr::Promote(index))
+                    }
+                    self.add(Instr::Capture(expr_index, capture_source))
+                }
             }
             Expr::Call(closure, args) => {
                 self.input_expr(*closure)?;
@@ -207,28 +225,35 @@ impl Compile {
                 ))
             }
 
+            Expr::Var(id) => {
+                if let Some(value_index) = self.var(&id) {
+                    self.add(Instr::Copy(expr_index, value_index));
+                    if self.current_block.promoted_indexes.contains(&value_index) {
+                        self.add(Instr::Demote(expr_index))
+                    }
+                } else if let Some(captured_index) = self.try_capture(&id) {
+                    self.add(Instr::GetCaptured(expr_index, captured_index))
+                } else {
+                    return Err(CompileError::UnknownVariable(id));
+                }
+            }
+
+            Expr::Compound(stmts, expr) => {
+                self.current_block.scopes.push(Default::default());
+                for stmt in stmts {
+                    self.input_stmt(stmt)?
+                }
+                self.input_expr(*expr)?;
+                self.current_block.scopes.pop().unwrap();
+            }
+
+            Expr::Match(_) => todo!(),
+
             Expr::Literal(Literal::Unit) => self.add(Instr::MakeUnit(expr_index)),
             Expr::Literal(Literal::String(string)) => {
                 self.add(Instr::MakeString(expr_index, string))
             }
             Expr::Future => self.add(Instr::MakeFuture(expr_index)),
-
-            Expr::Var(id) => {
-                if let Some(value_index) = self.var(&id) {
-                    self.add(Instr::Copy(expr_index, value_index))
-                } else {
-                    todo!()
-                }
-            }
-            Expr::Compound(stmts, expr) => {
-                for stmt in stmts {
-                    self.input_stmt(stmt)?
-                }
-                self.input_expr(*expr)?
-            }
-
-            Expr::Import(_, _) => todo!(),
-            Expr::Match(_) => todo!(),
         }
         Ok(())
     }
@@ -237,7 +262,8 @@ impl Compile {
         self.current_block.instrs.push(instr)
     }
 
-    fn assign(&mut self, id: String, value_index: ValueIndex) {
+    // want to do def() and use(), but use is keyword
+    fn bind(&mut self, id: String, value_index: ValueIndex) {
         self.current_block
             .scopes
             .last_mut()
@@ -246,11 +272,57 @@ impl Compile {
     }
 
     fn var(&self, id: &str) -> Option<ValueIndex> {
-        for scope in self.current_block.scopes.iter().rev() {
+        Self::var_impl(id, &self.current_block)
+    }
+
+    fn var_impl(id: &str, block: &CompileBlock) -> Option<ValueIndex> {
+        for scope in block.scopes.iter().rev() {
             if let Some(&value_index) = scope.get(id) {
                 return Some(value_index);
             }
         }
         None
+    }
+
+    fn try_capture(&mut self, id: &str) -> Option<usize> {
+        for (index, (captured_id, _)) in self.current_block.captures.iter().enumerate() {
+            if captured_id == id {
+                return Some(index);
+            }
+        }
+
+        let index = self.current_outer_blocks.len() - 1;
+        let source = Self::try_capture_impl(id, &mut self.current_outer_blocks, index)?;
+
+        let captured_index = self.current_block.captures.len();
+        self.current_block.captures.push((id.into(), source));
+        Some(captured_index)
+    }
+
+    fn try_capture_impl(
+        id: &str,
+        outer_blocks: &mut [CompileBlock],
+        index: usize,
+    ) -> Option<CaptureSource> {
+        if let Some(value_index) = Self::var_impl(id, &outer_blocks[index]) {
+            return Some(CaptureSource::Owning(value_index));
+        }
+
+        for (captured_index, (captured_id, _)) in outer_blocks[index].captures.iter().enumerate() {
+            if captured_id == id {
+                return Some(CaptureSource::Transitive(captured_index));
+            }
+        }
+
+        if index == 0 {
+            return None;
+        }
+        let source = Self::try_capture_impl(id, outer_blocks, index - 1)?;
+
+        let captured_index = outer_blocks[index].captures.len();
+        outer_blocks[captured_index]
+            .captures
+            .push((id.into(), source));
+        Some(CaptureSource::Transitive(captured_index))
     }
 }

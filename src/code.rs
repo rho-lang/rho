@@ -20,7 +20,7 @@ pub enum Stmt {
     Notify(Expr), // notify all tasks `Wait`ing on a Future
     Spawn(Expr),
 
-    Assign(String, Expr),
+    Bind(String, Expr),
     Package(String),
     Export(String),
     Intrinsic(syntax::Intrinsic),
@@ -82,7 +82,9 @@ pub enum Instr {
     MakeString(ValueIndex, String),
 
     MakeClosure(ValueIndex, Box<Block>), // dst, block, captured
-    Promote(ValueIndex),                 // promote the value (i.e. wrap into a Ref) for capturing
+    // promote the value into a cell for capturing. promote is a separated operation
+    // to capture for 1. multiple concurrent capture 2. recursive capture
+    Promote(ValueIndex),                 
     Capture(ValueIndex, CaptureSource),
     // inner access
     GetCaptured(ValueIndex, usize),
@@ -114,8 +116,8 @@ pub enum Instr {
 
 #[derive(Debug)]
 pub enum CaptureSource {
-    Value(ValueIndex),
-    Captured(usize),
+    Owning(ValueIndex),
+    Transitive(usize),
 }
 
 pub mod instr {

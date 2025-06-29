@@ -233,12 +233,12 @@ impl Eval {
                     }
                     Instr::Capture(dst, source) => {
                         let addr = match source {
-                            CaptureSource::Value(index) => {
+                            CaptureSource::Owning(index) => {
                                 let captured_value = frame.values[*index];
                                 captured_value.ensure_type(TypeId::CELL).unwrap();
                                 captured_value.data
                             }
-                            CaptureSource::Captured(index) => frame.closure.captured[*index],
+                            CaptureSource::Transitive(index) => frame.closure.captured[*index],
                         };
                         frame.values[*dst]
                             .get_closure_mut(space)
