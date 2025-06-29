@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let Some(source) = args().nth(1) else {
         return Err("source is not specified".into());
     };
-    let prog = compile_sources(Path::new(&source), &mut asset)?;
+    let prog = compile_sources(Path::new(&source).canonicalize()?, &mut asset)?;
 
     for block_id in 0..=prog.block_id {
         println!("{}", asset.display_block(block_id))
@@ -41,11 +41,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn compile_sources(path: &Path, asset: &mut Asset) -> Result<Closure, Box<dyn Error>> {
-    fn walk(path: &Path, compile: &mut Compile, asset: &mut Asset) -> Result<(), Box<dyn Error>> {
-        let source = read_to_string(path)?.parse::<Source>()?;
+fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure, Box<dyn Error>> {
+    fn walk(
+        path: impl AsRef<Path>,
+        compile: &mut Compile,
+        asset: &mut Asset,
+    ) -> Result<(), Box<dyn Error>> {
+        let source = read_to_string(&path)?.parse::<Source>()?;
         for input in source.inputs {
-            let input = Path::new(&input);
+            let input = path
+                .as_ref()
+                .parent()
+                .expect("source file has parent")
+                .join(input);
             if input.is_file() {
                 walk(input, compile, asset)?
             } else {

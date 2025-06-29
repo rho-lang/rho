@@ -1,0 +1,15 @@
+let x = "foo"
+
+let f1 = func() {
+    intrinsic trace (x)
+}
+
+let f2 = func() {
+    x = "bar"
+}
+
+f1()
+x = "baz"
+f1()
+f2()
+f1()
