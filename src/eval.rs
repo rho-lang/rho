@@ -517,13 +517,24 @@ pub mod intrinsics {
     use thiserror::Error;
 
     use crate::{
-        code::ValueIndex,
+        asset::Asset,
+        code::{ValueIndex, instr::Intrinsic},
         eval::{ExecuteError, Value},
         oracle::Oracle,
         space::Space,
     };
 
     use super::Future;
+
+    pub fn preload(asset: &mut Asset) {
+        asset.intrinsics = [
+            ("trace", trace as Intrinsic),
+            ("notify_after", notify_after),
+            //
+        ]
+        .map(|(s, f)| (s.into(), f))
+        .into()
+    }
 
     #[derive(Error, Debug)]
     pub enum Error {

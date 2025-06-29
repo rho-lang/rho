@@ -7,17 +7,12 @@ use thiserror::Error;
 
 use crate::{
     asset::Asset,
-    code::{
-        Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic,
-    },
+    code::{Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex},
     eval::Closure,
 };
 
 #[derive(Default)]
 pub struct Compile {
-    pub intrinsics: HashMap<String, Intrinsic>,
-    pub asset: Asset,
-
     main: Vec<Instr>,
     main_num_value: usize,
 
@@ -50,7 +45,7 @@ impl Compile {
         Self::default()
     }
 
-    pub fn finish(mut self) -> (Closure, Asset) {
+    pub fn finish(mut self, asset: &mut Asset) -> Closure {
         self.main.push(Instr::MakeUnit(0));
         self.main.push(Instr::Return(0));
         let block = Block {
@@ -59,7 +54,7 @@ impl Compile {
             num_value: self.main_num_value,
             instrs: self.main,
         };
-        (Closure::new(self.asset.add_block(block)), self.asset)
+        Closure::new(asset.add_block(block))
     }
 }
 
@@ -80,10 +75,10 @@ pub enum CompileError {
 }
 
 impl Compile {
-    pub fn input(&mut self, stmts: Vec<Stmt>) -> Result<(), CompileError> {
+    pub fn input(&mut self, stmts: Vec<Stmt>, asset: &mut Asset) -> Result<(), CompileError> {
         self.current_block.scopes.push(Default::default());
         for stmt in stmts {
-            self.input_stmt(stmt)?
+            self.input_stmt(stmt, asset)?
         }
 
         assert!(self.current_outer_blocks.is_empty());
@@ -108,7 +103,7 @@ impl Compile {
     // convention: input_stmt `add` instruction(s) that use values indexed from
     // `self.current_block.expr_index` onward as scratch pad. after input_stmt
     // returns, `self.current_block.expr_index` >= the point it was called
-    fn input_stmt(&mut self, stmt: Stmt) -> Result<(), CompileError> {
+    fn input_stmt(&mut self, stmt: Stmt, asset: &mut Asset) -> Result<(), CompileError> {
         match stmt {
             Stmt::Package(name) => {
                 let replaced = replace(&mut self.current_package_name, name);
@@ -133,7 +128,7 @@ impl Compile {
                 self.add(Instr::Jump(jump_target + 2, None));
                 self.add(Instr::Jump(usize::MAX, None)); // placeholder
                 self.current_block.loop_jump_targets.push(jump_target);
-                self.input_expr(expr)?;
+                self.input_expr(expr, asset)?;
                 self.current_block.loop_jump_targets.pop();
                 self.add(Instr::Jump(jump_target, None));
                 let after_target = self.current_block.instrs.len() + 1;
@@ -153,7 +148,7 @@ impl Compile {
             }
 
             Stmt::Intrinsic(intrinsic) => {
-                let Some(&native_fn) = self.intrinsics.get(&intrinsic.id) else {
+                let Some(&native_fn) = asset.intrinsics.get(&intrinsic.id) else {
                     return Err(CompileError::UnknownIntrinsic(intrinsic.id));
                 };
                 let num_dst_id = intrinsic.dst_ids.len();
@@ -163,7 +158,7 @@ impl Compile {
                 // first evaluate arguments without destination ids in scope
                 for (i, expr) in intrinsic.args.into_iter().enumerate() {
                     self.current_block.expr_index = expr_index + num_dst_id + i;
-                    self.input_expr(expr)?
+                    self.input_expr(expr, asset)?
                 }
                 for (i, id) in intrinsic.dst_ids.into_iter().enumerate() {
                     self.bind(id, expr_index + i)
@@ -175,28 +170,28 @@ impl Compile {
             }
 
             Stmt::Return(expr) => {
-                self.input_expr(expr)?;
+                self.input_expr(expr, asset)?;
                 self.add(Instr::Return(self.current_block.expr_index))
             }
             Stmt::Wait(expr) => {
-                self.input_expr(expr)?;
+                self.input_expr(expr, asset)?;
                 self.add(Instr::Wait(self.current_block.expr_index))
             }
             Stmt::Notify(expr) => {
-                self.input_expr(expr)?;
+                self.input_expr(expr, asset)?;
                 self.add(Instr::Notify(self.current_block.expr_index))
             }
             Stmt::Spawn(expr) => {
-                self.input_expr(expr)?;
+                self.input_expr(expr, asset)?;
                 self.add(Instr::Spawn(self.current_block.expr_index))
             }
             Stmt::Bind(id, expr) => {
-                self.input_expr(expr)?;
+                self.input_expr(expr, asset)?;
                 self.bind(id, self.current_block.expr_index);
                 self.current_block.expr_index += 1;
             }
 
-            Stmt::Expr(expr) => self.input_expr(expr)?,
+            Stmt::Expr(expr) => self.input_expr(expr, asset)?,
             // memo for compiling mutation
             // three cases. mutating owning plain value: just Copy. mutating promoted value:
             // SetPromoted. mutating captured value: SetCaptured
@@ -207,7 +202,7 @@ impl Compile {
     // convention: input_expr `add` instruction(s) that produce expression's value
     // at `self.current_block.expr_index` at the point input_expr is called. when
     // input_expr returns, `self.current_block.expr_index` >= when it was called
-    fn input_expr(&mut self, expr: Expr) -> Result<(), CompileError> {
+    fn input_expr(&mut self, expr: Expr, asset: &mut Asset) -> Result<(), CompileError> {
         let expr_index = self.current_block.expr_index;
         self.current_block.num_value = self.current_block.num_value.max(expr_index + 1);
         match expr {
@@ -227,7 +222,7 @@ impl Compile {
                         self.current_block.expr_index += 1
                     }
                     let expr_index = self.current_block.expr_index;
-                    self.input_expr(*func.body)?;
+                    self.input_expr(*func.body, asset)?;
                     self.add(Instr::Return(expr_index));
                 }
                 let func_block = replace(
@@ -241,7 +236,7 @@ impl Compile {
                     num_value: func_block.num_value,
                     instrs: func_block.instrs,
                 };
-                let block_id = self.asset.add_block(block);
+                let block_id = asset.add_block(block);
                 self.add(Instr::MakeClosure(expr_index, block_id));
                 for (_, capture_source) in func_block.captures {
                     if let &CaptureSource::Owning(index) = &capture_source
@@ -253,11 +248,11 @@ impl Compile {
                 }
             }
             Expr::Call(closure, args) => {
-                self.input_expr(*closure)?;
+                self.input_expr(*closure, asset)?;
                 let num_arg = args.len();
                 for (i, arg) in args.into_iter().enumerate() {
                     self.current_block.expr_index = expr_index + 1 + i;
-                    self.input_expr(arg)?
+                    self.input_expr(arg, asset)?
                 }
                 self.add(Instr::Call(
                     expr_index,
@@ -282,10 +277,10 @@ impl Compile {
             Expr::Compound(stmts, expr) => {
                 self.current_block.scopes.push(Default::default());
                 for stmt in stmts {
-                    self.input_stmt(stmt)?
+                    self.input_stmt(stmt, asset)?
                 }
                 let value_index = self.current_block.expr_index;
-                self.input_expr(*expr)?;
+                self.input_expr(*expr, asset)?;
                 self.add(Instr::Copy(expr_index, value_index));
                 self.current_block.scopes.pop().unwrap();
             }

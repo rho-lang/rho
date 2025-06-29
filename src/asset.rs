@@ -1,9 +1,13 @@
 use std::{
     collections::HashMap,
     fmt::{self, Display, Formatter},
+    ptr::fn_addr_eq,
 };
 
-use crate::{code::Block, typing::RecordLayout};
+use crate::{
+    code::{Block, instr::Intrinsic},
+    typing::RecordLayout,
+};
 
 pub type StringId = u32;
 pub type BlockId = u32;
@@ -12,6 +16,8 @@ pub type BlockId = u32;
 pub struct Asset {
     string_ids: HashMap<String, StringId>,
     strings: Vec<String>,
+
+    pub intrinsics: HashMap<String, Intrinsic>,
 
     blocks: Vec<Block>,
 }
@@ -58,20 +64,28 @@ impl Asset {
             match instr {
                 MakeClosure(dst, block_id) => write!(f, "MakeClosure({dst}, block#{block_id})")?,
                 MakeRecordType(dst, RecordLayout(attrs)) => {
-                    write!(f, "  MakeRecordType({dst}, ...)")?;
+                    write!(f, "MakeRecordType({dst}, ...)")?;
                     for &attr in attrs {
                         writeln!(f)?;
-                        write!(f, "    {}", self.get_string(attr))?
+                        write!(f, "       {}(attr)", self.get_string(attr))?
                     }
                 }
                 MakeRecord(dst, type_id, attrs) => {
-                    write!(f, "  MakeRecord({dst}, {type_id}, ...)")?;
+                    write!(f, "MakeRecord({dst}, {type_id}, ...)")?;
                     for &(attr, value_index) in attrs {
                         writeln!(f)?;
-                        write!(f, "    {}: <{value_index}>", self.get_string(attr))?
+                        write!(f, "       {}(attr): <{value_index}>", self.get_string(attr))?
                     }
                 }
-                Intrinsic(_, items) => {}
+                Intrinsic(native_fn, indexes) => {
+                    let id = self
+                        .intrinsics
+                        .iter()
+                        .find(|&(_, &f)| fn_addr_eq(f, *native_fn))
+                        .map(|(id, _)| &**id)
+                        .unwrap_or("??");
+                    write!(f, "Intrinsic({id}@{native_fn:?}, {indexes:?})")?
+                }
                 _ => write!(f, "{instr:?}")?,
             }
         }
