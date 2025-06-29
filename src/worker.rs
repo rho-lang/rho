@@ -38,7 +38,7 @@ pub fn run(main_closure: Closure, mut registry: TypeRegistry, asset: &Asset) {
             }
         };
         let task = tasks.get_mut(&task_id).expect("task {task_id} exists");
-        match task.run(&mut space, &mut registry, &mut sched, &mut oracle, &asset) {
+        match task.run(&mut space, &mut registry, &mut sched, &mut oracle, asset) {
             Ok(RunStatus::Exited) => {
                 tasks.remove(&task_id);
             }

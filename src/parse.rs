@@ -130,8 +130,24 @@ fn parse_export(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     Ok(vec![Stmt::Export(id.into())])
 }
 
-fn parse_import(_: &mut &str) -> Result<Vec<Stmt>, ParseError> {
-    todo!()
+fn parse_import(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
+    let name = s
+        .chars()
+        .take_while(|&c| c.is_alphanumeric() || c == '.' || c == '_')
+        .collect::<String>();
+    if name.is_empty() {
+        return Err(ParseError::InvalidPackage);
+    }
+    *s = s.strip_prefix(&name).unwrap();
+
+    *s = consume(trim(s), '[', "imported name list")?;
+    let ids = extract_identifiers(s);
+    *s = consume(trim(s), ']', "closing bracket of imported name list")?;
+    let stmts = ids
+        .into_iter()
+        .map(|id| Stmt::Bind(id.into(), Expr::Import(name.clone(), id.into())))
+        .collect();
+    Ok(stmts)
 }
 
 fn parse_package(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {

@@ -1,0 +1,13 @@
+!input ../lang
+@import lang[trace, sleep]
+
+let fut = future
+spawn func() {
+    trace("[sleep] start")
+    wait sleep("10ms")
+    notify fut
+    trace("[sleep] notified")
+}
+trace("[main] spawned")
+wait fut
+trace("[main] wait finished")

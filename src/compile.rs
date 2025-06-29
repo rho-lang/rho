@@ -72,6 +72,14 @@ pub enum CompileError {
     UnknownIntrinsic(String),
     #[error("unknown variable: {0}")]
     UnknownVariable(String),
+    #[error("export `{0}` from nested scope")]
+    InnerExport(String),
+    #[error("multiple export: {0}")]
+    MultipleExport(String),
+    #[error("unknown package: {0}")]
+    UnknownPackage(String),
+    #[error("invalid import from package `{0}`: {1}")]
+    InvalidImport(String, String),
 }
 
 impl Compile {
@@ -111,7 +119,22 @@ impl Compile {
                     return Err(CompileError::MultiplePackageStmt(replaced));
                 }
             }
-            Stmt::Export(id) => todo!(),
+            Stmt::Export(id) => {
+                if !self.current_outer_blocks.is_empty() {
+                    return Err(CompileError::InnerExport(id));
+                }
+                let Some(&value_index) = self.current_block.scopes.first().unwrap().get(&id) else {
+                    return Err(if self.var(&id).is_some() {
+                        CompileError::InnerExport(id)
+                    } else {
+                        CompileError::UnknownVariable(id)
+                    });
+                };
+                let replaced = self.current_package.exports.insert(id.clone(), value_index);
+                if replaced.is_some() {
+                    return Err(CompileError::MultipleExport(id));
+                }
+            }
 
             // for simple one pass compilation, loop is translated into
             // +0   Jump +2     # Continue target
@@ -224,7 +247,15 @@ impl Compile {
         let expr_index = self.current_block.expr_index;
         self.current_block.num_value = self.current_block.num_value.max(expr_index + 1);
         match expr {
-            Expr::Import(_, _) => todo!(),
+            Expr::Import(name, id) => {
+                let Some(package) = self.packages.get(&name) else {
+                    return Err(CompileError::UnknownPackage(name));
+                };
+                let Some(&value_index) = package.exports.get(&id) else {
+                    return Err(CompileError::InvalidImport(name, id));
+                };
+                self.add(Instr::Copy(expr_index, value_index))
+            }
 
             Expr::Literal(Literal::Func(func)) => {
                 let num_param = func.params.len();

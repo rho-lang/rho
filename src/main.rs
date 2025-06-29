@@ -12,6 +12,8 @@ mod worker;
 
 use std::{env::args, error::Error, fs::read_to_string, path::Path};
 
+use walkdir::WalkDir;
+
 use crate::{
     asset::Asset,
     compile::Compile,
@@ -47,7 +49,10 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
         compile: &mut Compile,
         asset: &mut Asset,
     ) -> Result<(), Box<dyn Error>> {
-        let source = read_to_string(&path)?.parse::<Source>()?;
+        tracing::debug!(path = %path.as_ref().display(), "compile");
+        let mut source_string = read_to_string(&path)?;
+        source_string.push('\n'); // assumed by Source::from_str
+        let source = source_string.parse::<Source>()?;
         for input in source.inputs {
             let input = path
                 .as_ref()
@@ -56,8 +61,16 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
                 .join(input);
             if input.is_file() {
                 walk(input, compile, asset)?
+            } else if input.is_dir() {
+                for entry in WalkDir::new(input) {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_file() && path.extension() == Some("foil".as_ref()) {
+                        walk(path, compile, asset)?
+                    }
+                }
             } else {
-                todo!()
+                return Err(format!("invalid input {}", input.display()).into());
             }
         }
         compile.input(source.stmts, asset)?;
