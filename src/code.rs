@@ -1,5 +1,5 @@
 use crate::{
-    asset::StringId,
+    asset::{BlockId, StringId},
     eval::{ExecuteError, Value},
     oracle::Oracle,
     space::Space,
@@ -81,7 +81,7 @@ pub enum Instr {
     MakeUnit(ValueIndex),
     MakeString(ValueIndex, String),
 
-    MakeClosure(ValueIndex, Box<Block>), // dst, block, captured
+    MakeClosure(ValueIndex, BlockId), // dst, block, captured
     // promote the value into a cell for capturing. promote is a separated operation
     // to capture for 1. multiple concurrent capture 2. recursive capture
     Promote(ValueIndex),

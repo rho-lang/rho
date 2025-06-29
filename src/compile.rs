@@ -53,7 +53,13 @@ impl Compile {
     pub fn finish(mut self) -> (Closure, Asset) {
         self.main.push(Instr::MakeUnit(0));
         self.main.push(Instr::Return(0));
-        (Closure::main(self.main, self.main_num_value), self.asset)
+        let block = Block {
+            name: "<main>".into(),
+            num_param: 0,
+            num_value: self.main_num_value,
+            instrs: self.main,
+        };
+        (Closure::new(self.asset.add_block(block)), self.asset)
     }
 }
 
@@ -235,7 +241,8 @@ impl Compile {
                     num_value: func_block.num_value,
                     instrs: func_block.instrs,
                 };
-                self.add(Instr::MakeClosure(expr_index, block.into()));
+                let block_id = self.asset.add_block(block);
+                self.add(Instr::MakeClosure(expr_index, block_id));
                 for (_, capture_source) in func_block.captures {
                     if let &CaptureSource::Owning(index) = &capture_source
                         && self.current_block.promoted_indexes.insert(index)

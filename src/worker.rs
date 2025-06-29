@@ -17,7 +17,7 @@ pub fn run(main_closure: Closure, mut registry: TypeRegistry, asset: &Asset) {
     let mut oracle = Oracle::TimerQueue(Default::default());
 
     let mut eval = Eval::new();
-    if let Err(err) = eval.init(main_closure) {
+    if let Err(err) = eval.init(main_closure, asset) {
         tracing::error!(%err, "top level task is not \"main-complaint\"");
         return;
     };

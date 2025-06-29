@@ -53,6 +53,5 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (prog, asset) = compile.finish();
 
     worker::run(prog, registry, &asset);
-    unsafe { prog.drop_main() }
     Ok(())
 }

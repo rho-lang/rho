@@ -3,8 +3,8 @@ use std::{slice, str};
 use thiserror::Error;
 
 use crate::{
-    asset::Asset,
-    code::{Block, CaptureSource, Instr, InstrIndex},
+    asset::{Asset, BlockId},
+    code::{CaptureSource, Instr, InstrIndex},
     oracle::{Oracle, OracleError},
     sched::{NotifyToken, Sched},
     space::{Space, SpaceAddr},
@@ -42,7 +42,7 @@ struct String {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Closure {
-    block: *const Block,
+    block_id: BlockId,
     // addresses of cells. reduced from `Value`s with `TypeId::CELL` because captured
     // values are always cells (assuming valid instruction sequence produced with
     // `compile` module), so save the memory and type check
@@ -51,30 +51,12 @@ pub struct Closure {
 }
 
 impl Closure {
-    /// # Safety
-    /// `block` must outlive Self.
-    unsafe fn new(block: *const Block) -> Self {
+    pub fn new(block_id: BlockId) -> Self {
         Self {
-            block,
+            block_id,
             captured: [SpaceAddr::MAX; 16],
             num_captured: 0,
         }
-    }
-
-    pub fn main(instrs: Vec<Instr>, num_value: usize) -> Self {
-        let block = Box::new(Block {
-            name: "<main>".into(),
-            instrs,
-            num_param: 0,
-            num_value,
-        });
-        unsafe { Self::new(Box::into_raw(block)) }
-    }
-
-    /// # Safety
-    /// `self` must be returned by `Closure::main`
-    pub unsafe fn drop_main(self) {
-        drop(unsafe { Box::from_raw(self.block as *mut Block) });
     }
 
     fn capture(&mut self, addr: SpaceAddr) {
@@ -108,8 +90,8 @@ impl Eval {
         Self::default()
     }
 
-    pub fn init(&mut self, closure: Closure) -> Result<(), ArityError> {
-        self.push_frame(closure, &[])
+    pub fn init(&mut self, closure: Closure, asset: &Asset) -> Result<(), ArityError> {
+        self.push_frame(closure, &[], asset)
     }
 }
 
@@ -121,8 +103,13 @@ pub struct ArityError {
 }
 
 impl Eval {
-    fn push_frame(&mut self, closure: Closure, args: &[Value]) -> Result<(), ArityError> {
-        let block = unsafe { &*closure.block };
+    fn push_frame(
+        &mut self,
+        closure: Closure,
+        args: &[Value],
+        asset: &Asset,
+    ) -> Result<(), ArityError> {
+        let block = asset.get_block(closure.block_id);
         if args.len() != block.num_param {
             return Err(ArityError {
                 expected: block.num_param,
@@ -179,11 +166,11 @@ impl Eval {
         // the contract here is `execute` should only be called after calling `init`,
         // and should not be called again after returning Exited
         let mut frame = self.frames.last_mut().expect("last frame exists");
+        let block = asset.get_block(frame.closure.block_id);
         'control: loop {
-            let name = unsafe { &(*frame.closure.block).name };
             // optimize for sequentially execute instructions
-            for instr in &unsafe { &*frame.closure.block }.instrs[frame.instr_pointer..] {
-                tracing::trace!(%frame.instr_pointer, %name, ?instr, "execute");
+            for instr in &block.instrs[frame.instr_pointer..] {
+                tracing::trace!(%frame.instr_pointer, %block.name, ?instr, "execute");
                 frame.instr_pointer += 1;
                 match instr {
                     Instr::Jump(instr_index, cond) => {
@@ -225,9 +212,8 @@ impl Eval {
                         sched.notify(notify_token)
                     }
 
-                    Instr::MakeClosure(dst, block) => {
-                        let closure_value =
-                            Value::alloc_closure(unsafe { Closure::new(&**block) }, space);
+                    Instr::MakeClosure(dst, block_id) => {
+                        let closure_value = Value::alloc_closure(Closure::new(*block_id), space);
                         frame.values[*dst] = closure_value
                     }
                     Instr::Promote(index) => {
@@ -273,7 +259,7 @@ impl Eval {
                     }
                     Instr::Spawn(closure) => {
                         let mut eval = Self::new();
-                        eval.init(frame.values[*closure].load_closure(space)?)?;
+                        eval.init(frame.values[*closure].load_closure(space)?, asset)?;
                         sched.spawn(Task::new(eval));
                     }
                     Instr::Call(dst, closure, args) => {
@@ -285,7 +271,7 @@ impl Eval {
                         let replaced = frame.call_dst.replace(*dst);
                         assert!(replaced.is_none());
                         // borrow to `self` via `frame` ends here
-                        self.push_frame(closure_value.load_closure(space)?, &arg_values)?;
+                        self.push_frame(closure_value.load_closure(space)?, &arg_values, asset)?;
                         // reborrow
                         frame = self.frames.last_mut().expect("last frame exists");
                         continue 'control;
