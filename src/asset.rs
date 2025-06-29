@@ -1,6 +1,9 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fmt::{self, Display, Formatter},
+};
 
-use crate::code::Block;
+use crate::{code::Block, typing::RecordLayout};
 
 pub type StringId = u32;
 pub type BlockId = u32;
@@ -42,5 +45,48 @@ impl Asset {
 
     pub fn get_block(&self, id: BlockId) -> &Block {
         &self.blocks[id as usize]
+    }
+
+    fn fmt_block(&self, id: BlockId, f: &mut Formatter<'_>) -> fmt::Result {
+        let block = self.get_block(id);
+        writeln!(f, "block#{id} {}/{}", block.name, block.num_param)?;
+        write!(f, "    #value = {}", block.num_value)?;
+        for (i, instr) in block.instrs.iter().enumerate() {
+            writeln!(f)?;
+            write!(f, "  {i:4} ")?;
+            use crate::code::Instr::*;
+            match instr {
+                MakeClosure(dst, block_id) => write!(f, "MakeClosure({dst}, block#{block_id})")?,
+                MakeRecordType(dst, RecordLayout(attrs)) => {
+                    write!(f, "  MakeRecordType({dst}, ...)")?;
+                    for &attr in attrs {
+                        writeln!(f)?;
+                        write!(f, "    {}", self.get_string(attr))?
+                    }
+                }
+                MakeRecord(dst, type_id, attrs) => {
+                    write!(f, "  MakeRecord({dst}, {type_id}, ...)")?;
+                    for &(attr, value_index) in attrs {
+                        writeln!(f)?;
+                        write!(f, "    {}: <{value_index}>", self.get_string(attr))?
+                    }
+                }
+                Intrinsic(_, items) => {}
+                _ => write!(f, "{instr:?}")?,
+            }
+        }
+        Ok(())
+    }
+
+    pub fn display_block(&self, id: BlockId) -> DisplayBlock<'_> {
+        DisplayBlock(self, id)
+    }
+}
+
+pub struct DisplayBlock<'a>(&'a Asset, BlockId);
+
+impl Display for DisplayBlock<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt_block(self.1, f)
     }
 }

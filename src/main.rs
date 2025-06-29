@@ -52,6 +52,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     compile.input(source.stmts)?;
     let (prog, asset) = compile.finish();
 
+    for block_id in 0..=prog.block_id {
+        println!("{}", asset.display_block(block_id))
+    }
+
     worker::run(prog, registry, &asset);
     Ok(())
 }

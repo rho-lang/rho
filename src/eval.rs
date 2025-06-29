@@ -42,7 +42,7 @@ struct String {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Closure {
-    block_id: BlockId,
+    pub block_id: BlockId,
     // addresses of cells. reduced from `Value`s with `TypeId::CELL` because captured
     // values are always cells (assuming valid instruction sequence produced with
     // `compile` module), so save the memory and type check
