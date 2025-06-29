@@ -13,7 +13,7 @@ mod worker;
 use std::error::Error;
 
 use crate::{
-    code::{Block, Instr},
+    code::{Block, CaptureSource, Instr},
     eval::{Closure, intrinsics},
     intern::StringId,
     parse::Source,
@@ -42,39 +42,38 @@ fn main() -> Result<(), Box<dyn Error>> {
     let source = SOURCE.parse::<Source>()?;
     println!("{source:?}");
 
-    const STRING_FUT1: StringId = 123;
     let simple = Block {
         name: "simple".into(),
         instrs: vec![
-            Instr::GetAttr(0, 0, STRING_FUT1),
-            Instr::MakeString(1, "[simple] start".into()),
-            Instr::Intrinsic(intrinsics::trace, vec![1]),
-            Instr::MakeFuture(1),
-            Instr::MakeString(2, "1s".into()),
-            Instr::Intrinsic(intrinsics::notify_after, vec![1, 2]),
-            Instr::Wait(1),
+            Instr::MakeString(0, "[simple] start".into()),
+            Instr::Intrinsic(intrinsics::trace, vec![0]),
+            Instr::MakeFuture(0),
+            Instr::MakeString(1, "1s".into()),
+            Instr::Intrinsic(intrinsics::notify_after, vec![0, 1]),
+            Instr::Wait(0),
+            Instr::GetCaptured(0, 0),
             Instr::Notify(0),
-            Instr::MakeString(1, "[simple] notified".into()),
-            Instr::Intrinsic(intrinsics::trace, vec![1]),
+            Instr::MakeString(0, "[simple] notified".into()),
+            Instr::Intrinsic(intrinsics::trace, vec![0]),
             Instr::MakeUnit(0),
             Instr::Return(0),
         ],
         num_param: 0,
-        num_captured: 1,
-        num_value: 3,
+        num_value: 2,
     };
     let prog = Closure::main(
         vec![
             Instr::MakeFuture(0),
-            Instr::MakeRecordType(1, RecordLayout(vec![STRING_FUT1])),
-            Instr::MakeRecord(1, 1, vec![(STRING_FUT1, 0)]),
-            Instr::MakeClosure(1, simple.into(), Some(1)),
+            Instr::MakeClosure(1, simple.into()),
+            Instr::Promote(0),
+            Instr::Capture(1, CaptureSource::Value(0)),
             Instr::Spawn(1),
             Instr::MakeString(1, "[main] spawned".into()),
             Instr::Intrinsic(intrinsics::trace, vec![1]),
+            Instr::Demote(0),
             Instr::Wait(0),
-            Instr::MakeString(1, "[main] wait finish".into()),
-            Instr::Intrinsic(intrinsics::trace, vec![1]),
+            Instr::MakeString(0, "[main] wait finish".into()),
+            Instr::Intrinsic(intrinsics::trace, vec![0]),
             Instr::MakeUnit(0),
             Instr::Return(0),
         ],

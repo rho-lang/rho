@@ -5,7 +5,10 @@ use std::{
 
 use thiserror::Error;
 
-use crate::code::{Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic};
+use crate::{
+    code::{Block, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex, instr::Intrinsic},
+    intern::{StringId, StringPool},
+};
 
 pub struct Compile {
     main: Vec<Instr>,
@@ -17,14 +20,17 @@ pub struct Compile {
     current_outer_blocks: Vec<CompileBlock>,
 
     intrinsics: HashMap<String, Intrinsic>,
+    pub string_pool: StringPool,
 }
 
 #[derive(Default)]
 struct CompileBlock {
     instrs: Vec<Instr>,
     expr_index: ValueIndex,
+    max_index: ValueIndex,
     scopes: Vec<HashMap<String, ValueIndex>>,
     loop_jump_targets: Vec<InstrIndex>,
+    captures: HashMap<StringId, ValueIndex>, // indexes into stack of outer CompileBlock
 }
 
 #[derive(Default)]
@@ -167,17 +173,26 @@ impl Compile {
             Expr::Literal(Literal::Func(func)) => {
                 self.current_outer_blocks
                     .push(take(&mut self.current_block));
-                self.current_block.expr_index += func.params.len();
-                for (index, id) in func.params.into_iter().enumerate() {
-                    self.assign(id, index)
+                let num_param = func.params.len();
+                // save index 0 for captured
+                for id in func.params {
+                    self.current_block.expr_index += 1;
+                    self.assign(id, self.current_block.expr_index)
                 }
+                self.current_block.expr_index += 1;
                 self.input_expr(*func.body)?;
 
                 let func_block = replace(
                     &mut self.current_block,
                     self.current_outer_blocks.pop().unwrap(),
                 );
-                // TODO
+                let block = Block {
+                    name: "TODO".into(),
+                    num_param,
+                    num_value: func_block.max_index + 1,
+                    instrs: func_block.instrs,
+                };
+                // self.add(Instr::MakeRecordType((), ()))
             }
             Expr::Call(closure, args) => {
                 self.input_expr(*closure)?;

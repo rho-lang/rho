@@ -48,6 +48,14 @@ impl Space {
 
     /// # Safety
     /// Same as `typed_get`.
+    pub unsafe fn typed_get_mut<T>(&mut self, addr: SpaceAddr) -> &mut T {
+        let addr = self.get_mut(addr, size_of::<T>()).as_mut_ptr().cast::<T>();
+        assert!(addr.is_aligned());
+        unsafe { &mut *addr }
+    }
+
+    /// # Safety
+    /// Same as `typed_get`.
     pub unsafe fn typed_write<T>(&mut self, addr: SpaceAddr, value: T) {
         let addr = self.get_mut(addr, size_of::<T>()).as_mut_ptr().cast::<T>();
         assert!(addr.is_aligned());

@@ -80,10 +80,19 @@ pub type ValueIndex = usize;
 pub enum Instr {
     MakeUnit(ValueIndex),
     MakeString(ValueIndex, String),
-    MakeClosure(ValueIndex, Box<Block>, Option<ValueIndex>), // destination, block, captured
+
+    MakeClosure(ValueIndex, Box<Block>), // dst, block, captured
+    Promote(ValueIndex),                 // promote the value (i.e. wrap into a Ref) for capturing
+    Capture(ValueIndex, CaptureSource),
+    // inner access
+    GetCaptured(ValueIndex, usize),
+    SetCaptured(usize, ValueIndex),
+    // outer access
+    Demote(ValueIndex),
+    SetPromoted(ValueIndex, ValueIndex),
 
     MakeRecordType(ValueIndex, RecordLayout),
-    MakeRecord(ValueIndex, ValueIndex, Vec<(StringId, ValueIndex)>),
+    MakeRecord(ValueIndex, ValueIndex, Vec<(StringId, ValueIndex)>), // dst, type_id, attrs
 
     MakeFuture(ValueIndex),
 
@@ -92,8 +101,8 @@ pub enum Instr {
     GetAttr(ValueIndex, ValueIndex, StringId), // #0 <- #1.#2
     SetAttr(ValueIndex, StringId, ValueIndex), // #0.#1 <- #2
 
-    Call(ValueIndex, ValueIndex, Vec<ValueIndex>), // destination, closure, arguments
     Jump(InstrIndex, Option<instr::Match>),
+    Call(ValueIndex, ValueIndex, Vec<ValueIndex>), // dst, closure, args
     Return(ValueIndex),
 
     Spawn(ValueIndex),
@@ -101,6 +110,12 @@ pub enum Instr {
     Notify(ValueIndex),
 
     Intrinsic(instr::Intrinsic, Vec<ValueIndex>),
+}
+
+#[derive(Debug)]
+pub enum CaptureSource {
+    Value(ValueIndex),
+    Captured(usize),
 }
 
 pub mod instr {
@@ -120,7 +135,6 @@ pub mod instr {
 #[derive(Debug)]
 pub struct Block {
     pub name: String,
-    pub num_captured: usize,
     pub num_param: usize,
     pub num_value: usize,
     pub instrs: Vec<Instr>,
