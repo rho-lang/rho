@@ -130,9 +130,9 @@ pub enum CaptureSource {
 pub enum Op2 {
     Add,
     Sub,
-    // Mul,
-    // Div,
-    // Mod,
+    Mul,
+    Div,
+    Rem,
     // And,
     // Or,
     // Xor,

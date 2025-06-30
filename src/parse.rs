@@ -111,19 +111,32 @@ fn parse_expr1(s: &mut &str) -> Result<Expr, ParseError> {
 }
 
 fn parse_expr2(s: &mut &str) -> Result<Expr, ParseError> {
-    let mut expr = parse_expr3(s)?;
-    loop {
+    let expr1 = parse_expr3(s)?;
+    parse_infix(s, expr1, ["*", "/", "%"], parse_expr3)
+}
+
+fn parse_expr3(s: &mut &str) -> Result<Expr, ParseError> {
+    let mut expr = parse_expr4(s)?;
+    'expr: loop {
         *s = trim(s);
-        if let Some(rest) = s.strip_prefix('(') {
-            *s = trim(rest);
-            expr = parse_call(s, expr)?;
-            continue;
+        for (prefix, method) in [
+            (
+                '(',
+                parse_call as fn(&mut &str, Expr) -> Result<Expr, ParseError>,
+            ),
+            ('.', parse_dot),
+        ] {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                *s = trim(rest);
+                expr = method(s, expr)?;
+                continue 'expr;
+            }
         }
         break Ok(expr);
     }
 }
 
-fn parse_expr3(s: &mut &str) -> Result<Expr, ParseError> {
+fn parse_expr4(s: &mut &str) -> Result<Expr, ParseError> {
     for (prefix, method) in [
         (
             "{",
@@ -357,6 +370,11 @@ fn parse_call(s: &mut &str, closure: Expr) -> Result<Expr, ParseError> {
     let args = extract_delimited(s, parse_expr);
     *s = consume(trim(s), ')', "closing parenthesis of argument list")?;
     Ok(Expr::Call(closure.into(), args))
+}
+
+fn parse_dot(s: &mut &str, record: Expr) -> Result<Expr, ParseError> {
+    let attr = extract_identifier(s)?;
+    Ok(Expr::GetAttr(record.into(), attr.into()))
 }
 
 fn parse_infix(

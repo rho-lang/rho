@@ -390,7 +390,13 @@ impl Eval {
 
                     Instr::Op2(dst, op, a, b) => {
                         let dst_value = match op {
-                            Op2::Add | Op2::Sub | Op2::Eq | Op2::Ne => {
+                            Op2::Add
+                            | Op2::Sub
+                            | Op2::Eq
+                            | Op2::Ne
+                            | Op2::Mul
+                            | Op2::Div
+                            | Op2::Rem => {
                                 let a = frame.values[*a].load_i32()?;
                                 let b = frame.values[*b].load_i32()?;
                                 match op {
@@ -398,6 +404,9 @@ impl Eval {
                                     Op2::Sub => Value::new_i32(a - b),
                                     Op2::Eq => Value::new_bool(a == b),
                                     Op2::Ne => Value::new_bool(a != b),
+                                    Op2::Mul => Value::new_i32(a * b),
+                                    Op2::Div => Value::new_i32(a / b),
+                                    Op2::Rem => Value::new_i32(a % b),
                                     // _ => unreachable!(),
                                 }
                             }

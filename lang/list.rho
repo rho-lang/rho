@@ -1,3 +1,21 @@
 @package lang.list
 
 let List = type[slice, len, cap]
+
+let create = func() {
+    intrinsic slice_new[slice](0)
+    new List[slice = slice, len = 0, cap = 0]
+}
+
+let len = func(list) {
+    list.len
+}
+
+let push = func(list, item) {
+    match list.len == list.cap case True {
+        let cap = match list.len == 0
+            case True 1
+            case False list.len * 2
+        intrinsic slice_new[slice](cap)
+    }
+}

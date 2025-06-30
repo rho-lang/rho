@@ -414,6 +414,9 @@ impl Compile {
                             "-" => Op2::Sub,
                             "==" => Op2::Eq,
                             "!=" => Op2::Ne,
+                            "*" => Op2::Mul,
+                            "/" => Op2::Div,
+                            "%" => Op2::Rem,
                             _ => unimplemented!(),
                         };
                         self.add(Instr::Op2(expr_index, op, expr_index, expr_index + 1))
