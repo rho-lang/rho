@@ -56,9 +56,7 @@ pub mod syntax {
     #[derive(Debug)]
     pub struct Match {
         pub scrutinee: Expr, // the field name is borrowed from Rust reference on pattern matching
-        pub pattern: Expr,
-        pub and_then: Expr,
-        pub or_else: Expr,
+        pub cases: Vec<(Expr, Expr)>, // (pattern, value)
     }
 
     #[derive(Debug)]

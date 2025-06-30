@@ -7,7 +7,9 @@ use thiserror::Error;
 
 use crate::{
     asset::Asset,
-    code::{Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Op2, Stmt, ValueIndex},
+    code::{
+        Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Op2, Stmt, ValueIndex, instr::Match,
+    },
     eval::Closure,
 };
 
@@ -162,7 +164,10 @@ impl Compile {
                 self.current_block.loop_jump_targets.pop();
                 self.add(Instr::Jump(jump_target, None));
                 let after_target = self.current_block.instrs.len();
-                self.current_block.instrs[jump_target + 1] = Instr::Jump(after_target, None)
+                let Instr::Jump(target, _) = &mut self.current_block.instrs[jump_target + 1] else {
+                    unreachable!()
+                };
+                *target = after_target
             }
             Stmt::Break => {
                 let Some(&jump_target) = self.current_block.loop_jump_targets.last() else {
@@ -342,7 +347,42 @@ impl Compile {
                 self.add(Instr::Copy(expr_index, value_index));
                 self.current_block.scopes.pop().unwrap();
             }
-            Expr::Match(_) => todo!(),
+            Expr::Match(match_expr) => {
+                self.input_expr(match_expr.scrutinee, asset)?;
+                let mut hit_jumps = Vec::new();
+                for (pattern, expr) in match_expr.cases {
+                    self.current_block.expr_index = expr_index + 1;
+                    self.input_expr(pattern, asset)?;
+                    hit_jumps.push((self.current_block.instrs.len(), expr));
+                    self.add(Instr::Jump(
+                        InstrIndex::MAX, // placeholder
+                        Some(Match {
+                            scrutinee: expr_index,
+                            pattern: expr_index + 1,
+                        }),
+                    ));
+                }
+                self.add(Instr::MakeUnit(expr_index));
+                let case_end_target = self.current_block.instrs.len();
+                self.add(Instr::Jump(InstrIndex::MAX, None)); // placeholder
+
+                for (jump_index, expr) in hit_jumps {
+                    let target = self.current_block.instrs.len();
+                    let Instr::Jump(index, _) = &mut self.current_block.instrs[jump_index] else {
+                        unreachable!()
+                    };
+                    *index = target;
+
+                    self.current_block.expr_index = expr_index;
+                    self.input_expr(expr, asset)?;
+                    self.add(Instr::Jump(case_end_target, None))
+                }
+                let after_target = self.current_block.instrs.len();
+                let Instr::Jump(target, _) = &mut self.current_block.instrs[case_end_target] else {
+                    unreachable!()
+                };
+                *target = after_target
+            }
             Expr::Op(op, args) => {
                 let num_arg = args.len();
                 for (i, arg) in args.into_iter().enumerate() {

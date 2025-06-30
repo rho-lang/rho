@@ -2,7 +2,10 @@ use std::{num::ParseIntError, str::FromStr};
 
 use thiserror::Error;
 
-use crate::code::{Expr, Func, Literal, Stmt, syntax::Intrinsic};
+use crate::code::{
+    Expr, Func, Literal, Stmt,
+    syntax::{Intrinsic, Match},
+};
 
 #[derive(Debug, Default)]
 pub struct Source {
@@ -118,7 +121,7 @@ fn parse_atomic_expr(s: &mut &str) -> Result<Expr, ParseError> {
         ("\"", parse_string_literal),
         ("func", parse_func),
         ("future", |_| Ok(Expr::Literal(Literal::Future))),
-        ("if", parse_match),
+        ("match", parse_match),
         // just write `{}`
         // ("unit", |_| Ok(Expr::Literal(Literal::Unit))),
     ] {
@@ -268,8 +271,21 @@ fn parse_func(s: &mut &str) -> Result<Expr, ParseError> {
     })))
 }
 
-fn parse_match(_: &mut &str) -> Result<Expr, ParseError> {
-    todo!()
+fn parse_match(s: &mut &str) -> Result<Expr, ParseError> {
+    let scrutinee = parse_expr(s)?;
+    let mut cases = Vec::new();
+    while let Some(rest) = trim(s).strip_prefix("case") {
+        *s = trim(rest);
+        let pattern = parse_expr(s)?;
+        *s = trim(s);
+        let expr = parse_expr(s)?;
+        cases.push((pattern, expr))
+    }
+    if cases.is_empty() {
+        Err(ParseError::Expect("match case(s)"))
+    } else {
+        Ok(Expr::Match(Box::new(Match { scrutinee, cases })))
+    }
 }
 
 fn parse_var(s: &mut &str) -> Result<Expr, ParseError> {
