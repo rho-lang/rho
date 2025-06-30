@@ -1,0 +1,14 @@
+!input ../lang
+@import lang[with, sleep, trace]
+
+wait with(func(start) {
+    trace("scope start")
+    start(func() {
+        wait sleep("10ms")
+        trace("task#1 finish")
+    })
+    start(func() {
+        wait sleep("10ms")
+        trace("task#2 finish")
+    })
+})
