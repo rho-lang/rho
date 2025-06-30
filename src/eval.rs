@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     asset::{Asset, BlockId},
-    code::{CaptureSource, Instr, InstrIndex},
+    code::{CaptureSource, Instr, InstrIndex, Op2},
     sched::NotifyToken,
     space::{OutOfSpace, Space, SpaceAddr},
     task::Task,
@@ -21,14 +21,14 @@ const _: () = assert!(align_of::<SpaceAddr>() == align_of::<usize>());
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
     type_id: TypeId,
-    data: usize, // embedded data for inline types, SpaceAddr pointing to actual data for others
+    data: u64, // embedded data for inline types, SpaceAddr pointing to actual data for others
 }
 
 impl Default for Value {
     fn default() -> Self {
         Self {
             type_id: TypeId::VACANT,
-            data: SpaceAddr::MAX,
+            data: u64::MAX,
         }
     }
 }
@@ -267,7 +267,7 @@ impl Eval {
                             CaptureSource::Original(index) => {
                                 let captured_value = frame.values[*index];
                                 captured_value.ensure_type(TypeId::CELL).unwrap();
-                                captured_value.data
+                                captured_value.data as _
                             }
                             CaptureSource::Transitive(index) => frame.closure.captured[*index],
                         };
@@ -298,7 +298,7 @@ impl Eval {
                         let value = frame.values[*index];
                         value.ensure_type(TypeId::CELL).unwrap();
                         frame.values[*index] =
-                            unsafe { load_record_attr(&context.space, value.data, 0) }
+                            unsafe { load_record_attr(&context.space, value.data as _, 0) }
                     }
                     Instr::SetPromoted(dst, src) => {
                         let dst_value = frame.values[*dst];
@@ -306,7 +306,7 @@ impl Eval {
                         unsafe {
                             store_record_attr(
                                 &mut context.space,
-                                dst_value.data,
+                                dst_value.data as _,
                                 0,
                                 frame.values[*src],
                             )
@@ -355,7 +355,7 @@ impl Eval {
                             ));
                         };
                         frame.values[*dst] =
-                            unsafe { load_record_attr(&context.space, record_value.data, pos) }
+                            unsafe { load_record_attr(&context.space, record_value.data as _, pos) }
                     }
                     Instr::SetAttr(record, attr, index) => {
                         let record_value = &frame.values[*record];
@@ -373,7 +373,7 @@ impl Eval {
                         unsafe {
                             store_record_attr(
                                 &mut context.space,
-                                record_value.data,
+                                record_value.data as _,
                                 pos,
                                 frame.values[*index],
                             )
@@ -383,6 +383,21 @@ impl Eval {
                     Instr::MakeUnit(dst) => frame.values[*dst] = Value::new_unit(),
                     Instr::MakeString(dst, literal) => {
                         frame.values[*dst] = Value::alloc_string(literal, &mut context.space)?
+                    }
+
+                    Instr::Op2(dst, op, a, b) => {
+                        let dst_value = match op {
+                            Op2::Add | Op2::Sub => {
+                                let a = frame.values[*a].load_i32()?;
+                                let b = frame.values[*b].load_i32()?;
+                                match op {
+                                    Op2::Add => Value::new_i32(a + b),
+                                    Op2::Sub => Value::new_i32(a - b),
+                                    // _ => unreachable!(),
+                                }
+                            }
+                        };
+                        frame.values[*dst] = dst_value
                     }
                 }
 
@@ -419,10 +434,6 @@ impl Value {
         Ok(())
     }
 
-    fn load_inline(&self) -> u64 {
-        self.data as _
-    }
-
     // helper methods for essential types
     // new_x        (X) -> Self                     construct inline type
     // alloc_x      (X, &mut Space) -> Self?        construct heap-allocated type
@@ -453,7 +464,7 @@ impl Value {
 
     fn load_type_id(&self) -> Result<TypeId, TypeError> {
         self.ensure_type(TypeId::TYPE_ID)?;
-        Ok(TypeId(self.load_inline() as _))
+        Ok(TypeId(self.data as _))
     }
 
     // Closure
@@ -462,18 +473,18 @@ impl Value {
         unsafe { space.typed_write(addr, closure) }
         Ok(Self {
             type_id: TypeId::CLOSURE,
-            data: addr,
+            data: addr as _,
         })
     }
 
     fn load_closure(&self, space: &Space) -> Result<Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(*unsafe { space.typed_get(self.data) })
+        Ok(*unsafe { space.typed_get(self.data as _) })
     }
 
     fn get_closure_mut<'a>(&self, space: &'a mut Space) -> Result<&'a mut Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(unsafe { space.typed_get_mut(self.data) })
+        Ok(unsafe { space.typed_get_mut(self.data as _) })
     }
 
     // cell type
@@ -482,7 +493,7 @@ impl Value {
         unsafe { space.typed_write(addr, value) }
         Ok(Self {
             type_id: TypeId::CELL,
-            data: addr,
+            data: addr as _,
         })
     }
     // access to cell is performed directly with SpaceAddr, not going through Value
@@ -493,20 +504,20 @@ impl Value {
         unsafe { space.typed_write(addr, future) };
         Ok(Self {
             type_id: TypeId::FUTURE,
-            data: addr,
+            data: addr as _,
         })
     }
 
     fn load_future(&self, space: &Space) -> Result<Future, TypeError> {
         self.ensure_type(TypeId::FUTURE)?;
-        Ok(*unsafe { space.typed_get(self.data) })
+        Ok(*unsafe { space.typed_get(self.data as _) })
     }
 
     // unit type
     fn new_unit() -> Self {
         Self {
             type_id: TypeId::UNIT,
-            data: SpaceAddr::MAX,
+            data: u64::MAX,
         }
     }
 
@@ -526,13 +537,30 @@ impl Value {
         unsafe { space.typed_write(addr, String { buf, len }) }
         Ok(Self {
             type_id: TypeId::STRING,
-            data: addr,
+            data: addr as _,
         })
+    }
+
+    // i32 type
+    fn new_i32(value: i32) -> Self {
+        let mut data = [0; size_of::<u64>()];
+        data[..size_of::<i32>()].copy_from_slice(&value.to_ne_bytes());
+        Self {
+            type_id: TypeId::I32,
+            data: u64::from_ne_bytes(data),
+        }
+    }
+
+    fn load_i32(&self) -> Result<i32, TypeError> {
+        self.ensure_type(TypeId::I32)?;
+        let mut value = [0; size_of::<i32>()];
+        value.copy_from_slice(&self.data.to_ne_bytes()[..size_of::<i32>()]);
+        Ok(i32::from_ne_bytes(value))
     }
 
     fn get_string<'a>(&self, space: &'a Space) -> Result<&'a str, TypeError> {
         self.ensure_type(TypeId::STRING)?;
-        let string = unsafe { space.typed_get::<String>(self.data) };
+        let string = unsafe { space.typed_get::<String>(self.data as _) };
         Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
@@ -553,7 +581,7 @@ impl Value {
         }
         Ok(Self {
             type_id,
-            data: addr,
+            data: addr as _,
         })
     }
 }

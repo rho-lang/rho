@@ -342,8 +342,8 @@ impl Compile {
                 self.add(Instr::Copy(expr_index, value_index));
                 self.current_block.scopes.pop().unwrap();
             }
-
             Expr::Match(_) => todo!(),
+            Expr::Op(op, args) => todo!(),
 
             Expr::Literal(Literal::Unit) => self.add(Instr::MakeUnit(expr_index)),
             Expr::Literal(Literal::String(string)) => {

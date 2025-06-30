@@ -11,7 +11,7 @@ pub struct RecordLayout(pub Vec<StringId>);
 // machine. for example
 // let MyType = type (foo, bar, baz)
 // creates a TypeId Value { type_id: TypeId::TYPE_ID, data: TypeId(123) } on the
-// call frame, while a RecordLayout is registered for TypeId(123) in 
+// call frame, while a RecordLayout is registered for TypeId(123) in
 // TypeRegistry
 // it is possible (or even preferred) to store the type metadata directly on the
 // heap (i.e. Space) and use its SpaceAddr as id. the rationale for a dedicated
@@ -42,6 +42,7 @@ impl TypeId {
 
     // essential (native) types
     pub const STRING: Self = Self(6);
+    pub const I32: Self = Self(7);
 
     pub const RESERVED_MAX: Self = Self(100);
 }

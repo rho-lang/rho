@@ -32,11 +32,12 @@ pub enum Expr {
     Literal(Literal),
     Import(String, String),
     Var(String),
+    Future, // the synchronization object
+
     Compound(Vec<Stmt>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
+    Op(String, Vec<Expr>),
     Match(Box<syntax::Match>),
-
-    Future, // the synchronization object
 }
 
 #[derive(Debug)]
@@ -100,6 +101,7 @@ pub enum Instr {
     MakeFuture(ValueIndex),
 
     Copy(ValueIndex, ValueIndex),
+    Op2(ValueIndex, Op2, ValueIndex, ValueIndex),
 
     GetAttr(ValueIndex, ValueIndex, StringId), // #0 <- #1.#2
     SetAttr(ValueIndex, StringId, ValueIndex), // #0.#1 <- #2
@@ -119,6 +121,24 @@ pub enum Instr {
 pub enum CaptureSource {
     Original(ValueIndex),
     Transitive(usize),
+}
+
+#[derive(Debug)]
+pub enum Op2 {
+    Add,
+    Sub,
+    // Mul,
+    // Div,
+    // Mod,
+    // And,
+    // Or,
+    // Xor,
+    // Eq,
+    // Neq,
+    // Lt,
+    // Gt,
+    // Leq,
+    // Geq,
 }
 
 pub mod instr {
