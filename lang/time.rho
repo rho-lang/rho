@@ -5,6 +5,6 @@ let Duration = type[secs, nanos]
 
 let since_start = func() {
     intrinsic time_since_start[secs, nanos]
-    # Duration[secs = secs, nanos = nanos]
+    new Duration[secs = secs, nanos = nanos]
 }
 @export since_start

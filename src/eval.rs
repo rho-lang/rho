@@ -688,7 +688,7 @@ pub mod intrinsics {
         let duration = START.with(|start| start.elapsed());
         assert!(
             duration.as_secs() < i32::MAX as _,
-            "program has running for too long"
+            "program has been running for too long"
         );
         values[indexes[0]] = Value::new_i32(duration.as_secs() as _);
         values[indexes[1]] = Value::new_i32(duration.subsec_nanos() as _);

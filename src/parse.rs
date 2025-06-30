@@ -133,6 +133,7 @@ fn parse_expr3(s: &mut &str) -> Result<Expr, ParseError> {
         ("func", parse_func),
         ("future", |_| Ok(Expr::Literal(Literal::Future))),
         ("match", parse_match),
+        ("new", parse_new),
         ("type", parse_type),
         // just write `{}`
         // ("unit", |_| Ok(Expr::Literal(Literal::Unit))),
@@ -167,11 +168,11 @@ fn parse_import(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     *s = s.strip_prefix(&name).unwrap();
 
     *s = consume(trim(s), '[', "imported name list")?;
-    let ids = extract_identifiers(s);
+    let ids = extract_delimited(s, |s| extract_identifier(s).map(Into::into));
     *s = consume(trim(s), ']', "closing bracket of imported name list")?;
     let stmts = ids
         .into_iter()
-        .map(|id| Stmt::Bind(id.into(), Expr::Import(name.clone(), id.into())))
+        .map(|id: String| Stmt::Bind(id.clone(), Expr::Import(name.clone(), id)))
         .collect();
     Ok(stmts)
 }
@@ -193,13 +194,13 @@ fn parse_intrinsic(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     let mut bindings = Vec::new();
     if let Some(rest) = trim(s).strip_prefix('[') {
         *s = trim(rest);
-        bindings = extract_identifiers(s).into_iter().map(Into::into).collect();
+        bindings = extract_delimited(s, |s| extract_identifier(s).map(Into::into));
         *s = consume(trim(s), ']', "closing bracket of intrinsic bindings")?
     }
     let mut args = Vec::new();
     if let Some(rest) = trim(s).strip_prefix('(') {
         *s = trim(rest);
-        args = extract_args(s);
+        args = extract_delimited(s, parse_expr);
         *s = consume(
             trim(s),
             ')',
@@ -282,7 +283,7 @@ fn parse_string_literal(s: &mut &str) -> Result<Expr, ParseError> {
 
 fn parse_func(s: &mut &str) -> Result<Expr, ParseError> {
     *s = consume(s, '(', "function parameter list")?;
-    let params = extract_identifiers(s).into_iter().map(Into::into).collect();
+    let params = extract_delimited(s, |s| extract_identifier(s).map(Into::into));
     *s = consume(s, ')', "closing parenthesis of function parameter list")?;
     Ok(Expr::Func(Func {
         params,
@@ -307,11 +308,33 @@ fn parse_match(s: &mut &str) -> Result<Expr, ParseError> {
     }
 }
 
+fn parse_new(s: &mut &str) -> Result<Expr, ParseError> {
+    let expr = parse_expr(s)?;
+    let mut attrs = Vec::new();
+    if let Some(rest) = trim(s).strip_prefix("[") {
+        *s = trim(rest);
+        // by accident these two have the same structure :)
+        attrs = extract_delimited(s, parse_let)
+            .into_iter()
+            .flatten()
+            .map(|stmt| {
+                if let Stmt::Bind(id, expr) = stmt {
+                    (id, expr)
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect();
+        *s = consume(trim(s), ']', "closing bracket of record attribute list")?
+    }
+    Ok(Expr::Record(expr.into(), attrs))
+}
+
 fn parse_type(s: &mut &str) -> Result<Expr, ParseError> {
     let mut attrs = Vec::new();
     if let Some(rest) = s.strip_prefix('[') {
         *s = trim(rest);
-        attrs = extract_identifiers(s).into_iter().map(Into::into).collect();
+        attrs = extract_delimited(s, |s| extract_identifier(s).map(Into::into));
         *s = consume(trim(s), ']', "closing bracket of attribute list")?;
     }
     Ok(Expr::Type(attrs))
@@ -331,7 +354,7 @@ fn parse_i32(s: &mut &str) -> Result<Expr, ParseError> {
 }
 
 fn parse_call(s: &mut &str, closure: Expr) -> Result<Expr, ParseError> {
-    let args = extract_args(s);
+    let args = extract_delimited(s, parse_expr);
     *s = consume(trim(s), ')', "closing parenthesis of argument list")?;
     Ok(Expr::Call(closure.into(), args))
 }
@@ -389,34 +412,15 @@ fn extract_identifier<'a>(s: &mut &'a str) -> Result<&'a str, ParseError> {
     unreachable!("expect ending newline")
 }
 
-fn extract_identifiers<'a>(s: &mut &'a str) -> Vec<&'a str> {
-    let id = match extract_identifier(s) {
-        Ok(id) => id,
-        Err(_) => return vec![],
-    };
-    let mut ids = match consume(s, ',', "(ignored)") {
+fn extract_delimited<T>(s: &mut &str, parse: fn(&mut &str) -> Result<T, ParseError>) -> Vec<T> {
+    let Ok(item) = parse(s) else { return vec![] };
+    let mut items = match consume(trim(s), ',', "(ignored)") {
         Ok(rest) => {
-            *s = rest;
-            extract_identifiers(s)
+            *s = trim(rest);
+            extract_delimited(s, parse)
         }
         Err(_) => Vec::new(),
     };
-    ids.insert(0, id);
-    ids
-}
-
-fn extract_args(s: &mut &str) -> Vec<Expr> {
-    let expr = match parse_expr(s) {
-        Ok(id) => id,
-        Err(_) => return vec![],
-    };
-    let mut ids = match consume(s, ',', "(ignored)") {
-        Ok(rest) => {
-            *s = rest;
-            extract_args(s)
-        }
-        Err(_) => Vec::new(),
-    };
-    ids.insert(0, expr);
-    ids
+    items.insert(0, item);
+    items
 }
