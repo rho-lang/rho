@@ -133,6 +133,7 @@ fn parse_expr3(s: &mut &str) -> Result<Expr, ParseError> {
         ("func", parse_func),
         ("future", |_| Ok(Expr::Literal(Literal::Future))),
         ("match", parse_match),
+        ("type", parse_type),
         // just write `{}`
         // ("unit", |_| Ok(Expr::Literal(Literal::Unit))),
     ] {
@@ -189,16 +190,23 @@ fn parse_package(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
 
 fn parse_intrinsic(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     let id = extract_identifier(s)?.into();
-    *s = trim(s);
-    let dst_ids = extract_identifiers(s).into_iter().map(Into::into).collect();
-    *s = consume(trim(s), '(', "intrinsic argument list")?;
-    let args = extract_args(s);
-    *s = consume(
-        trim(s),
-        ')',
-        "closing parenthesis of intrinsic argument list",
-    )?;
-    Ok(vec![Stmt::Intrinsic(Intrinsic { id, dst_ids, args })])
+    let mut bindings = Vec::new();
+    if let Some(rest) = trim(s).strip_prefix('[') {
+        *s = trim(rest);
+        bindings = extract_identifiers(s).into_iter().map(Into::into).collect();
+        *s = consume(trim(s), ']', "closing bracket of intrinsic bindings")?
+    }
+    let mut args = Vec::new();
+    if let Some(rest) = trim(s).strip_prefix('(') {
+        *s = trim(rest);
+        args = extract_args(s);
+        *s = consume(
+            trim(s),
+            ')',
+            "closing parenthesis of intrinsic argument list",
+        )?
+    }
+    Ok(vec![Stmt::Intrinsic(Intrinsic { id, bindings, args })])
 }
 
 fn parse_let(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
@@ -297,6 +305,16 @@ fn parse_match(s: &mut &str) -> Result<Expr, ParseError> {
     } else {
         Ok(Expr::Match(Box::new(Match { scrutinee, cases })))
     }
+}
+
+fn parse_type(s: &mut &str) -> Result<Expr, ParseError> {
+    let mut attrs = Vec::new();
+    if let Some(rest) = s.strip_prefix('[') {
+        *s = trim(rest);
+        attrs = extract_identifiers(s).into_iter().map(Into::into).collect();
+        *s = consume(trim(s), ']', "closing bracket of attribute list")?;
+    }
+    Ok(Expr::Type(attrs))
 }
 
 fn parse_var(s: &mut &str) -> Result<Expr, ParseError> {

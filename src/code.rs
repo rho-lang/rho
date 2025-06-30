@@ -65,7 +65,7 @@ pub mod syntax {
     #[derive(Debug)]
     pub struct Intrinsic {
         pub id: String,
-        pub dst_ids: Vec<String>,
+        pub bindings: Vec<String>,
         pub args: Vec<Expr>,
     }
 }

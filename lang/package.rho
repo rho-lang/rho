@@ -1,6 +1,6 @@
 @package lang
 
 let trace = func(message) {
-    intrinsic trace (message)
+    intrinsic trace(message)
 }
 @export trace

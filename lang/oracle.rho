@@ -17,7 +17,7 @@ let sleep = func() {
 
 spawn func() {
     loop {
-        intrinsic oracle_advance_future oracle_advance ()
+        intrinsic oracle_advance_future[oracle_advance]
         wait oracle_advance
 
         match num_yielded != 0 case True {

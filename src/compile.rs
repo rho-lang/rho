@@ -187,20 +187,20 @@ impl Compile {
                 let Some(&native_fn) = asset.intrinsics.get(&intrinsic.id) else {
                     return Err(CompileError::UnknownIntrinsic(intrinsic.id));
                 };
-                let num_dst_id = intrinsic.dst_ids.len();
+                let num_binding = intrinsic.bindings.len();
                 let num_arg = intrinsic.args.len();
 
                 // first evaluate arguments without destination ids in scope
                 for (i, expr) in intrinsic.args.into_iter().enumerate() {
-                    self.current_block.expr_index = expr_index + num_dst_id + i;
+                    self.current_block.expr_index = expr_index + num_binding + i;
                     self.input_expr(expr, asset)?
                 }
-                for (i, id) in intrinsic.dst_ids.into_iter().enumerate() {
+                for (i, id) in intrinsic.bindings.into_iter().enumerate() {
                     self.bind(id, expr_index + i)
                 }
                 self.add(Instr::Intrinsic(
                     native_fn,
-                    (expr_index..expr_index + num_dst_id + num_arg).collect(),
+                    (expr_index..expr_index + num_binding + num_arg).collect(),
                 ))
             }
 

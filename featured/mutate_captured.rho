@@ -1,7 +1,7 @@
 let x = "foo"
 
 let f1 = func() {
-    intrinsic trace (x)
+    intrinsic trace(x)
 }
 
 let f2 = func() {
