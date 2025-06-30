@@ -6,8 +6,6 @@ let trace = func(message) {
 @export trace
 
 let sleep = func(duration) {
-    let fut = future
-    intrinsic notify_after (fut, duration)
-    fut
+    # TODO
 }
 @export sleep

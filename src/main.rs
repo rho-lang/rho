@@ -2,7 +2,6 @@ mod asset;
 mod code;
 mod compile;
 mod eval;
-mod oracle;
 mod parse;
 mod sched;
 mod space;
@@ -45,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("{}", asset.display_block(block_id))
     }
 
-    worker::run(prog, registry, &asset);
+    worker::run(prog, registry, asset.into());
     Ok(())
 }
 

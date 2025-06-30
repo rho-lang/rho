@@ -1,8 +1,6 @@
 use crate::{
     asset::{BlockId, StringId},
     eval::{ExecuteError, Value},
-    oracle::Oracle,
-    space::Space,
     typing::RecordLayout,
 };
 
@@ -124,11 +122,13 @@ pub enum CaptureSource {
 }
 
 pub mod instr {
+    use crate::worker::WorkerContext;
+
     use super::*;
 
     // currently not seen any intrinsic that need to be `unsafe`
     pub type Intrinsic =
-        fn(&mut [Value], &[ValueIndex], &mut Space, &mut Oracle) -> Result<(), ExecuteError>;
+        fn(&mut [Value], &[ValueIndex], &mut WorkerContext) -> Result<(), ExecuteError>;
 
     #[derive(Debug)]
     pub struct Match {

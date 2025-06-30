@@ -13,9 +13,6 @@ use crate::{
 
 #[derive(Default)]
 pub struct Compile {
-    main: Vec<Instr>,
-    main_num_value: usize,
-
     packages: HashMap<String, Package>,
     current_package_name: String,
     current_package: Package,
@@ -23,7 +20,6 @@ pub struct Compile {
     current_outer_blocks: Vec<CompileBlock>,
 }
 
-#[derive(Default)]
 struct CompileBlock {
     instrs: Vec<Instr>,
     promoted_indexes: HashSet<ValueIndex>,
@@ -33,6 +29,21 @@ struct CompileBlock {
     loop_jump_targets: Vec<InstrIndex>,
     captures: Vec<(String, CaptureSource)>, // to be translated into Capture instructions
     closure_name_hint: String,
+}
+
+impl Default for CompileBlock {
+    fn default() -> Self {
+        Self {
+            instrs: Default::default(),
+            promoted_indexes: Default::default(),
+            expr_index: 0,
+            num_value: 0,
+            scopes: vec![Default::default()],
+            loop_jump_targets: Default::default(),
+            captures: Default::default(),
+            closure_name_hint: Default::default(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -46,13 +57,13 @@ impl Compile {
     }
 
     pub fn finish(mut self, asset: &mut Asset) -> Closure {
-        self.main.push(Instr::MakeUnit(0));
-        self.main.push(Instr::Return(0));
+        self.add(Instr::MakeUnit(0));
+        self.add(Instr::Return(0));
         let block = Block {
             name: "<main>".into(),
             num_param: 0,
-            num_value: self.main_num_value,
-            instrs: self.main,
+            num_value: self.current_block.num_value,
+            instrs: self.current_block.instrs,
         };
         Closure::new(asset.add_block(block))
     }
@@ -84,15 +95,10 @@ pub enum CompileError {
 
 impl Compile {
     pub fn input(&mut self, stmts: Vec<Stmt>, asset: &mut Asset) -> Result<(), CompileError> {
-        self.current_block.scopes.push(Default::default());
         for stmt in stmts {
             self.input_stmt(stmt, asset)?
         }
-
         assert!(self.current_outer_blocks.is_empty());
-        let block = take(&mut self.current_block);
-        self.main.extend(block.instrs);
-        self.main_num_value = self.main_num_value.max(block.num_value);
 
         let mut package_name = take(&mut self.current_package_name);
         if package_name.is_empty() {
@@ -155,7 +161,7 @@ impl Compile {
                 self.input_expr(expr, asset)?;
                 self.current_block.loop_jump_targets.pop();
                 self.add(Instr::Jump(jump_target, None));
-                let after_target = self.current_block.instrs.len() + 1;
+                let after_target = self.current_block.instrs.len();
                 self.current_block.instrs[jump_target + 1] = Instr::Jump(after_target, None)
             }
             Stmt::Break => {

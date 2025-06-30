@@ -1,10 +1,7 @@
 use crate::{
     asset::Asset,
     eval::{Eval, ExecuteError},
-    oracle::Oracle,
-    sched::Sched,
-    space::Space,
-    typing::TypeRegistry,
+    worker::WorkerContext,
 };
 
 // currently Task is a redundant concept: a Task is no more than a Eval
@@ -27,12 +24,9 @@ pub type RunStatus = crate::eval::ExecuteStatus;
 impl Task {
     pub fn run(
         &mut self,
-        space: &mut Space,
-        registry: &mut TypeRegistry,
-        sched: &mut Sched,
-        oracle: &mut Oracle,
+        context: &mut WorkerContext,
         asset: &Asset,
     ) -> Result<RunStatus, ExecuteError> {
-        self.eval.execute(space, registry, sched, oracle, asset)
+        self.eval.execute(context, asset)
     }
 }

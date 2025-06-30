@@ -5,11 +5,11 @@ use thiserror::Error;
 use crate::{
     asset::{Asset, BlockId},
     code::{CaptureSource, Instr, InstrIndex},
-    oracle::{Oracle, OracleError},
-    sched::{NotifyToken, Sched},
+    sched::NotifyToken,
     space::{OutOfSpace, Space, SpaceAddr},
     task::Task,
-    typing::{RecordLayout, TypeId, TypeRegistry},
+    typing::{RecordLayout, TypeId},
+    worker::WorkerContext,
 };
 
 // optimization plan: pack Value into a u64 word. 24 bits for `type_id` and 40
@@ -145,8 +145,6 @@ pub enum ExecuteError {
     #[error("{0}")]
     Arity(#[from] ArityError),
     #[error("{0}")]
-    Oracle(#[from] OracleError),
-    #[error("{0}")]
     Intrinsic(#[from] intrinsics::Error),
     #[error("perform record operation on other types")]
     NotRecord,
@@ -159,10 +157,7 @@ pub enum ExecuteError {
 impl Eval {
     pub fn execute(
         &mut self,
-        space: &mut Space,
-        registry: &mut TypeRegistry,
-        sched: &mut Sched,
-        oracle: &mut Oracle,
+        context: &mut WorkerContext,
         asset: &Asset,
     ) -> Result<ExecuteStatus, ExecuteError> {
         // the contract here is `execute` should only be called after calling `init`,
@@ -195,8 +190,8 @@ impl Eval {
 
                     Instr::Spawn(closure) => {
                         let mut eval = Self::new();
-                        eval.init(frame.values[*closure].load_closure(space)?, asset)?;
-                        sched.spawn(Task::new(eval));
+                        eval.init(frame.values[*closure].load_closure(&context.space)?, asset)?;
+                        context.sched.spawn(Task::new(eval));
                     }
                     Instr::Call(dst, closure, args) => {
                         let closure_value = frame.values[*closure];
@@ -207,7 +202,11 @@ impl Eval {
                         let replaced = frame.call_dst.replace(*dst);
                         assert!(replaced.is_none());
                         // borrow to `self` via `frame` ends here
-                        self.push_frame(closure_value.load_closure(space)?, &arg_values, asset)?;
+                        self.push_frame(
+                            closure_value.load_closure(&context.space)?,
+                            &arg_values,
+                            asset,
+                        )?;
                         // reborrow
                         frame = self.frames.last_mut().expect("last frame exists");
                         continue 'control;
@@ -230,22 +229,24 @@ impl Eval {
 
                     Instr::MakeFuture(dst) => {
                         // leaking a NotifyToken should be fine
-                        let future = Future(sched.alloc_notify_token());
-                        frame.values[*dst] = Value::alloc_future(future, space)?
+                        let future = Future(context.sched.alloc_notify_token());
+                        frame.values[*dst] = Value::alloc_future(future, &mut context.space)?
                     }
                     Instr::Wait(future) => {
-                        let Future(notify_token) = frame.values[*future].load_future(space)?;
+                        let Future(notify_token) =
+                            frame.values[*future].load_future(&context.space)?;
                         // on the next `execute`, start from the next instruction
                         frame.instr_pointer += 1;
                         break 'control Ok(ExecuteStatus::Waiting(notify_token));
                     }
                     Instr::Notify(future) => {
-                        let Future(notify_token) = frame.values[*future].load_future(space)?;
-                        sched.notify(notify_token)
+                        let Future(notify_token) =
+                            frame.values[*future].load_future(&context.space)?;
+                        context.sched.notify(notify_token)
                     }
 
                     Instr::Intrinsic(intrinsic, indexes) => {
-                        intrinsic(&mut frame.values, indexes, space, oracle)?
+                        intrinsic(&mut frame.values, indexes, context)?
                     }
                     Instr::Copy(dst, src) => {
                         let src_value = frame.values[*src];
@@ -253,11 +254,13 @@ impl Eval {
                     }
 
                     Instr::MakeClosure(dst, block_id) => {
-                        let closure_value = Value::alloc_closure(Closure::new(*block_id), space)?;
+                        let closure_value =
+                            Value::alloc_closure(Closure::new(*block_id), &mut context.space)?;
                         frame.values[*dst] = closure_value
                     }
                     Instr::Promote(index) => {
-                        frame.values[*index] = Value::alloc_cell(frame.values[*index], space)?
+                        frame.values[*index] =
+                            Value::alloc_cell(frame.values[*index], &mut context.space)?
                     }
                     Instr::Capture(dst, source) => {
                         let addr = match source {
@@ -269,19 +272,23 @@ impl Eval {
                             CaptureSource::Transitive(index) => frame.closure.captured[*index],
                         };
                         frame.values[*dst]
-                            .get_closure_mut(space)
+                            .get_closure_mut(&mut context.space)
                             .unwrap()
                             .capture(addr)
                     }
                     // the 0 position corresponds to Ref layout
                     Instr::GetCaptured(dst, captured_index) => {
                         frame.values[*dst] = unsafe {
-                            load_record_attr(space, frame.closure.captured[*captured_index], 0)
+                            load_record_attr(
+                                &context.space,
+                                frame.closure.captured[*captured_index],
+                                0,
+                            )
                         }
                     }
                     Instr::SetCaptured(captured_index, index) => unsafe {
                         store_record_attr(
-                            space,
+                            &mut context.space,
                             frame.closure.captured[*captured_index],
                             0,
                             frame.values[*index],
@@ -290,21 +297,31 @@ impl Eval {
                     Instr::Demote(index) => {
                         let value = frame.values[*index];
                         value.ensure_type(TypeId::CELL).unwrap();
-                        frame.values[*index] = unsafe { load_record_attr(space, value.data, 0) }
+                        frame.values[*index] =
+                            unsafe { load_record_attr(&context.space, value.data, 0) }
                     }
                     Instr::SetPromoted(dst, src) => {
                         let dst_value = frame.values[*dst];
                         dst_value.ensure_type(TypeId::CELL).unwrap();
-                        unsafe { store_record_attr(space, dst_value.data, 0, frame.values[*src]) }
+                        unsafe {
+                            store_record_attr(
+                                &mut context.space,
+                                dst_value.data,
+                                0,
+                                frame.values[*src],
+                            )
+                        }
                     }
 
                     Instr::MakeRecordType(dst, layout) => {
-                        let type_id = registry.add_record_type(layout.clone());
+                        let type_id = context.registry.add_record_type(layout.clone());
                         frame.values[*dst] = Value::new_type_id(type_id)
                     }
                     Instr::MakeRecord(dst, type_id, attrs) => {
                         let type_id = frame.values[*type_id].load_type_id()?;
-                        let Some(RecordLayout(layout)) = registry.get_record_layout(type_id) else {
+                        let Some(RecordLayout(layout)) =
+                            context.registry.get_record_layout(type_id)
+                        else {
                             return Err(ExecuteError::NotRecord);
                         };
                         let mut record_attrs = vec![Value::default(); layout.len()];
@@ -321,12 +338,13 @@ impl Eval {
                         if attrs.len() != layout.len() {
                             return Err(ExecuteError::MissingAttr);
                         }
-                        frame.values[*dst] = Value::alloc_record(type_id, record_attrs, space)?
+                        frame.values[*dst] =
+                            Value::alloc_record(type_id, record_attrs, &mut context.space)?
                     }
                     Instr::GetAttr(dst, record, attr) => {
                         let record_value = &frame.values[*record];
                         let Some(RecordLayout(layout)) =
-                            registry.get_record_layout(record_value.type_id)
+                            context.registry.get_record_layout(record_value.type_id)
                         else {
                             return Err(ExecuteError::NotRecord);
                         };
@@ -337,12 +355,12 @@ impl Eval {
                             ));
                         };
                         frame.values[*dst] =
-                            unsafe { load_record_attr(space, record_value.data, pos) }
+                            unsafe { load_record_attr(&context.space, record_value.data, pos) }
                     }
                     Instr::SetAttr(record, attr, index) => {
                         let record_value = &frame.values[*record];
                         let Some(RecordLayout(layout)) =
-                            registry.get_record_layout(record_value.type_id)
+                            context.registry.get_record_layout(record_value.type_id)
                         else {
                             return Err(ExecuteError::NotRecord);
                         };
@@ -353,13 +371,18 @@ impl Eval {
                             ));
                         };
                         unsafe {
-                            store_record_attr(space, record_value.data, pos, frame.values[*index])
+                            store_record_attr(
+                                &mut context.space,
+                                record_value.data,
+                                pos,
+                                frame.values[*index],
+                            )
                         }
                     }
 
                     Instr::MakeUnit(dst) => frame.values[*dst] = Value::new_unit(),
                     Instr::MakeString(dst, literal) => {
-                        frame.values[*dst] = Value::alloc_string(literal, space)?
+                        frame.values[*dst] = Value::alloc_string(literal, &mut context.space)?
                     }
                 }
 
@@ -541,18 +564,14 @@ pub mod intrinsics {
     use crate::{
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
-        eval::{ExecuteError, Value},
-        oracle::Oracle,
-        space::Space,
+        eval::{ExecuteError, Future, Value},
+        worker::WorkerContext,
     };
-
-    use super::Future;
 
     pub fn preload(asset: &mut Asset) {
         asset.intrinsics = [
             ("trace", trace as Intrinsic),
-            ("notify_after", notify_after),
-            //
+            ("oracle_advance_future", oracle_advance_future),
         ]
         .map(|(s, f)| (s.into(), f))
         .into()
@@ -573,27 +592,20 @@ pub mod intrinsics {
     pub fn trace(
         values: &mut [Value],
         indexes: &[ValueIndex],
-        space: &mut Space,
-        _: &mut Oracle,
+        context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let message = values[indexes[0]].get_string(space)?;
+        let message = values[indexes[0]].get_string(&context.space)?;
         tracing::info!(message);
         Ok(())
     }
 
-    pub fn notify_after(
+    pub fn oracle_advance_future(
         values: &mut [Value],
         indexes: &[ValueIndex],
-        space: &mut Space,
-        oracle: &mut Oracle,
+        context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let Future(notify_token) = values[indexes[0]].load_future(space)?;
-        let duration = values[indexes[1]]
-            .get_string(space)?
-            .parse::<humantime::Duration>()
-            .map_err(Error::ParseDuration)?
-            .into();
-        oracle.notify_after(notify_token, duration)?;
+        values[indexes[0]] =
+            Value::alloc_future(Future(context.oracle_advance), &mut context.space)?;
         Ok(())
     }
 }
