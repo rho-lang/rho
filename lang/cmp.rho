@@ -1,0 +1,16 @@
+@package lang.cmp
+let LessThan = type
+@export LessThan
+let Equal = type
+@export Equal
+let GreaterThan = type
+@export GreaterThan
+
+let int32 = func(a, b) {
+    match a < b
+        case True LessThan
+        case False match a > b
+            case True GreaterThan
+            case False Equal
+}
+@export int32

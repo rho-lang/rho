@@ -1,0 +1,18 @@
+!input ../lang
+@import lang[trace]
+@import lang.list[create, push, get, binary_search]
+@import lang.cmp[cmp_int32 = int32]
+
+let xs = create()
+push(xs, 1)
+push(xs, 2)
+push(xs, 3)
+push(xs, 4)
+push(xs, 11)
+push(xs, 12)
+push(xs, 13)
+push(xs, 14)
+
+let s = binary_search(xs, 1, cmp_int32)
+match s case Found trace("Found")
+match s.index == 0 case True trace("at index 0")

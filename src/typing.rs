@@ -43,7 +43,7 @@ impl TypeId {
 
     // essential native (or marker) types
     pub const STRING: Self = Self(6);
-    pub const I32: Self = Self(7);
+    pub const INT32: Self = Self(7);
     pub const TRUE: Self = Self(8);
     pub const FALSE: Self = Self(9);
 

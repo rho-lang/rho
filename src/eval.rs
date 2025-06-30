@@ -385,7 +385,7 @@ impl Eval {
                         frame.values[*dst] = Value::alloc_string(literal, &mut context.space)?
                     }
                     Instr::MakeI32(dst, value) => {
-                        frame.values[*dst] = Value::new_i32(*value);
+                        frame.values[*dst] = Value::new_int32(*value);
                     }
 
                     Instr::Op2(dst, op, a, b) => {
@@ -396,17 +396,25 @@ impl Eval {
                             | Op2::Ne
                             | Op2::Mul
                             | Op2::Div
-                            | Op2::Rem => {
-                                let a = frame.values[*a].load_i32()?;
-                                let b = frame.values[*b].load_i32()?;
+                            | Op2::Rem
+                            | Op2::Lt
+                            | Op2::Gt
+                            | Op2::Le
+                            | Op2::Ge => {
+                                let a = frame.values[*a].load_int32()?;
+                                let b = frame.values[*b].load_int32()?;
                                 match op {
-                                    Op2::Add => Value::new_i32(a + b),
-                                    Op2::Sub => Value::new_i32(a - b),
+                                    Op2::Add => Value::new_int32(a + b),
+                                    Op2::Sub => Value::new_int32(a - b),
                                     Op2::Eq => Value::new_bool(a == b),
                                     Op2::Ne => Value::new_bool(a != b),
-                                    Op2::Mul => Value::new_i32(a * b),
-                                    Op2::Div => Value::new_i32(a / b),
-                                    Op2::Rem => Value::new_i32(a % b),
+                                    Op2::Mul => Value::new_int32(a * b),
+                                    Op2::Div => Value::new_int32(a / b),
+                                    Op2::Rem => Value::new_int32(a % b),
+                                    Op2::Lt => Value::new_bool(a < b),
+                                    Op2::Gt => Value::new_bool(a > b),
+                                    Op2::Le => Value::new_bool(a <= b),
+                                    Op2::Ge => Value::new_bool(a >= b),
                                     // _ => unreachable!(),
                                 }
                             }
@@ -561,18 +569,18 @@ impl Value {
         Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
-    // i32 type
-    fn new_i32(value: i32) -> Self {
+    // Int32 type
+    fn new_int32(value: i32) -> Self {
         let mut data = [0; size_of::<u64>()];
         data[..size_of::<i32>()].copy_from_slice(&value.to_ne_bytes());
         Self {
-            type_id: TypeId::I32,
+            type_id: TypeId::INT32,
             data: u64::from_ne_bytes(data),
         }
     }
 
-    fn load_i32(&self) -> Result<i32, TypeError> {
-        self.ensure_type(TypeId::I32)?;
+    fn load_int32(&self) -> Result<i32, TypeError> {
+        self.ensure_type(TypeId::INT32)?;
         let mut value = [0; size_of::<i32>()];
         value.copy_from_slice(&self.data.to_ne_bytes()[..size_of::<i32>()]);
         Ok(i32::from_ne_bytes(value))
@@ -624,7 +632,7 @@ impl Value {
 }
 
 pub mod intrinsics {
-    use std::ptr::copy_nonoverlapping;
+    use std::ptr::copy;
 
     use thiserror::Error;
 
@@ -690,7 +698,7 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         _: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let id = values[indexes[1]].load_i32()?;
+        let id = values[indexes[1]].load_int32()?;
         values[indexes[0]] = Value::new_type_id(TypeId(id as _));
         Ok(())
     }
@@ -706,8 +714,8 @@ pub mod intrinsics {
             duration.as_secs() < i32::MAX as _,
             "program has been running for too long"
         );
-        values[indexes[0]] = Value::new_i32(duration.as_secs() as _);
-        values[indexes[1]] = Value::new_i32(duration.subsec_nanos() as _);
+        values[indexes[0]] = Value::new_int32(duration.as_secs() as _);
+        values[indexes[1]] = Value::new_int32(duration.subsec_nanos() as _);
         Ok(())
     }
 
@@ -733,7 +741,7 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let len = values[indexes[1]].load_i32()?;
+        let len = values[indexes[1]].load_int32()?;
         let slice = Slice(
             context
                 .space
@@ -749,7 +757,7 @@ pub mod intrinsics {
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
         let Slice(buf) = values[indexes[1]].load_slice()?;
-        let pos = values[indexes[2]].load_i32()?;
+        let pos = values[indexes[2]].load_int32()?;
         values[indexes[0]] = unsafe { value_slice_load(&context.space, buf, pos as _) };
         Ok(())
     }
@@ -759,9 +767,9 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let Slice(buf) = values[indexes[1]].load_slice()?;
-        let pos = values[indexes[2]].load_i32()?;
-        unsafe { value_slice_store(&mut context.space, buf, pos as _, values[indexes[0]]) }
+        let Slice(buf) = values[indexes[0]].load_slice()?;
+        let pos = values[indexes[1]].load_int32()?;
+        unsafe { value_slice_store(&mut context.space, buf, pos as _, values[indexes[2]]) }
         Ok(())
     }
 
@@ -774,9 +782,9 @@ pub mod intrinsics {
     ) -> Result<(), ExecuteError> {
         let Slice(src) = values[indexes[0]].load_slice()?;
         let Slice(dst) = values[indexes[1]].load_slice()?;
-        let len = values[indexes[2]].load_i32()?;
+        let len = values[indexes[2]].load_int32()?;
         unsafe {
-            copy_nonoverlapping(
+            copy(
                 context.space.typed_get::<Value>(src),
                 context.space.typed_get_mut(dst),
                 len as _,

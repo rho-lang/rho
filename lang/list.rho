@@ -1,3 +1,4 @@
+!input cmp
 @package lang.list
 
 let List = type[slice, len, cap]
@@ -6,10 +7,12 @@ let create = func() {
     intrinsic slice_new[slice](0)
     new List[slice = slice, len = 0, cap = 0]
 }
+@export create
 
 let len = func(list) {
     list.len
 }
+@export len
 
 let push = func(list, item) {
     match list.len == list.cap case True {
@@ -17,5 +20,60 @@ let push = func(list, item) {
             case True 1
             case False list.len * 2
         intrinsic slice_new[slice](cap)
+        intrinsic slice_copy(list.slice, slice, list.len)
+        list mut.slice = slice
+        list mut.cap = cap
     }
+    intrinsic slice_store(list.slice, list.len, item)
+    list mut.len = list.len + 1
 }
+@export push
+
+let get = func(list, index) {
+    match index >= list.len case True {
+        return {}  # TODO throw exception
+    }
+    intrinsic slice_load[item](list.slice, index)
+    item
+}
+@export get
+
+let set = func(list, index, item) {
+    match index >= list.len case True {
+        return {}  # TODO throw exception
+    }
+    intrinsic slice_store(list.slice, index, item)
+}
+@export set
+
+let Found = type[index]
+let InsertAt = type[index]
+let binary_search = func(list, target, cmp) {
+    @import lang.cmp[GreaterThan, Equal, LessThan]
+
+    let size = list.len
+    match size == 0 case True {
+        return new InsertAt[index = 0]
+    }
+
+    let base = 0
+    loop match size > 1 
+        case False { break }
+        case True {
+        let half = size / 2
+        let mid = base + half
+        base = match cmp(mid, target)
+            case GreaterThan base
+            case Equal mid
+            case LessThan mid
+        size = size - half
+    }
+
+    match cmp(base, target)
+        case Equal new Found[index = base]
+        case GreaterThan new InsertAt[index = base]
+        case LessThan new InsertAt[index = base + 1]
+}
+@export Found
+@export InsertAt
+@export binary_search

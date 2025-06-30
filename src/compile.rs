@@ -208,10 +208,10 @@ impl Compile {
                 self.current_block.closure_name_hint = id.clone();
                 self.input_expr(expr, asset)?;
                 self.current_block.closure_name_hint.clear();
-                self.bind(id, self.current_block.expr_index);
-                self.current_block.expr_index += 1;
+                self.bind(id, expr_index);
+                self.current_block.expr_index = expr_index + 1
             }
-            Stmt::Mutate(id, expr) => {
+            Stmt::Mut(id, expr) => {
                 self.current_block.closure_name_hint = id.clone();
                 self.input_expr(expr, asset)?;
                 self.current_block.closure_name_hint.clear();
@@ -228,6 +228,16 @@ impl Compile {
                 } else {
                     return Err(CompileError::UnknownVariable(id));
                 }
+            }
+            Stmt::MutAttr(record_expr, attr, expr) => {
+                self.input_expr(record_expr, asset)?;
+                self.current_block.expr_index = expr_index + 1;
+                self.input_expr(expr, asset)?;
+                self.add(Instr::SetAttr(
+                    expr_index,
+                    asset.intern(attr),
+                    expr_index + 1,
+                ))
             }
 
             Stmt::Return(expr) => {
@@ -417,6 +427,10 @@ impl Compile {
                             "*" => Op2::Mul,
                             "/" => Op2::Div,
                             "%" => Op2::Rem,
+                            "<" => Op2::Lt,
+                            ">" => Op2::Gt,
+                            "<=" => Op2::Le,
+                            ">=" => Op2::Ge,
                             _ => unimplemented!(),
                         };
                         self.add(Instr::Op2(expr_index, op, expr_index, expr_index + 1))

@@ -19,7 +19,8 @@ pub enum Stmt {
     Spawn(Expr),
 
     Bind(String, Expr),
-    Mutate(String, Expr),
+    Mut(String, Expr),
+    MutAttr(Expr, String, Expr),
 
     Package(String),
     Export(String),
@@ -138,10 +139,10 @@ pub enum Op2 {
     // Xor,
     Eq,
     Ne,
-    // Lt,
-    // Gt,
-    // Leq,
-    // Geq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
 }
 
 pub mod instr {

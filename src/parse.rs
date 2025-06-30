@@ -85,15 +85,18 @@ fn parse_directive(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
         }
     }
     let expr = parse_expr(s)?;
-    let stmt = if let Expr::Var(id) = &expr
+    let stmts = if let Expr::Var(id) = &expr
         && let Some(rest) = trim(s).strip_prefix('=')
     {
         *s = trim(rest);
-        Stmt::Mutate(id.into(), parse_expr(s)?)
+        vec![Stmt::Mut(id.into(), parse_expr(s)?)]
+    } else if let Some(rest) = trim(s).strip_prefix("mut") {
+        *s = trim(rest);
+        parse_mut(s, expr)?
     } else {
-        Stmt::Expr(expr)
+        vec![Stmt::Expr(expr)]
     };
-    Ok(vec![stmt])
+    Ok(stmts)
 }
 
 fn parse_expr(s: &mut &str) -> Result<Expr, ParseError> {
@@ -102,7 +105,7 @@ fn parse_expr(s: &mut &str) -> Result<Expr, ParseError> {
 
 fn parse_expr0(s: &mut &str) -> Result<Expr, ParseError> {
     let expr1 = parse_expr1(s)?;
-    parse_infix(s, expr1, ["!=", "=="], parse_expr1)
+    parse_infix(s, expr1, ["!=", "==", ">=", "<=", ">", "<"], parse_expr1)
 }
 
 fn parse_expr1(s: &mut &str) -> Result<Expr, ParseError> {
@@ -121,10 +124,10 @@ fn parse_expr3(s: &mut &str) -> Result<Expr, ParseError> {
         *s = trim(s);
         for (prefix, method) in [
             (
-                '(',
+                "(",
                 parse_call as fn(&mut &str, Expr) -> Result<Expr, ParseError>,
             ),
-            ('.', parse_dot),
+            (".", parse_dot),
         ] {
             if let Some(rest) = s.strip_prefix(prefix) {
                 *s = trim(rest);
@@ -181,11 +184,20 @@ fn parse_import(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     *s = s.strip_prefix(&name).unwrap();
 
     *s = consume(trim(s), '[', "imported name list")?;
-    let ids = extract_delimited(s, |s| extract_identifier(s).map(Into::into));
+    let imports = extract_delimited(s, |s| {
+        let id = extract_identifier(s)?;
+        let imported_id = if let Some(rest) = trim(s).strip_prefix("=") {
+            *s = trim(rest);
+            extract_identifier(s)?
+        } else {
+            id
+        };
+        Ok((id.into(), imported_id.into()))
+    });
     *s = consume(trim(s), ']', "closing bracket of imported name list")?;
-    let stmts = ids
+    let stmts = imports
         .into_iter()
-        .map(|id: String| Stmt::Bind(id.clone(), Expr::Import(name.clone(), id)))
+        .map(|(id, imported_id)| Stmt::Bind(id, Expr::Import(name.clone(), imported_id)))
         .collect();
     Ok(stmts)
 }
@@ -375,6 +387,17 @@ fn parse_call(s: &mut &str, closure: Expr) -> Result<Expr, ParseError> {
 fn parse_dot(s: &mut &str, record: Expr) -> Result<Expr, ParseError> {
     let attr = extract_identifier(s)?;
     Ok(Expr::GetAttr(record.into(), attr.into()))
+}
+
+fn parse_mut(s: &mut &str, record: Expr) -> Result<Vec<Stmt>, ParseError> {
+    *s = consume(trim(s), '.', "dot in record mutation")?;
+    let attr = extract_identifier(s)?;
+    *s = consume(trim(s), '=', "\"=\" in record mutation")?;
+    Ok(vec![Stmt::MutAttr(
+        record.into(),
+        attr.into(),
+        parse_expr(s)?,
+    )])
 }
 
 fn parse_infix(
