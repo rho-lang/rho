@@ -4,13 +4,16 @@
 @import lang[trace]
 
 let yield_fut = future
-
 let num_yielded = 0
 let yield = func() {
     num_yielded = num_yielded + 1
     wait yield_fut
 }
 @export yield
+
+let sleep = func() {
+    # TODO
+}
 
 spawn func() {
     loop {

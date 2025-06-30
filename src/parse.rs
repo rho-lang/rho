@@ -276,10 +276,10 @@ fn parse_func(s: &mut &str) -> Result<Expr, ParseError> {
     *s = consume(s, '(', "function parameter list")?;
     let params = extract_identifiers(s).into_iter().map(Into::into).collect();
     *s = consume(s, ')', "closing parenthesis of function parameter list")?;
-    Ok(Expr::Literal(Literal::Func(Func {
+    Ok(Expr::Func(Func {
         params,
         body: parse_expr(s)?.into(),
-    })))
+    }))
 }
 
 fn parse_match(s: &mut &str) -> Result<Expr, ParseError> {

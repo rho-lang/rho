@@ -4,8 +4,3 @@ let trace = func(message) {
     intrinsic trace (message)
 }
 @export trace
-
-let sleep = func(duration) {
-    # TODO
-}
-@export sleep

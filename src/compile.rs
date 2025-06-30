@@ -11,6 +11,7 @@ use crate::{
         Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Op2, Stmt, ValueIndex, instr::Match,
     },
     eval::Closure,
+    typing::RecordLayout,
 };
 
 #[derive(Default)]
@@ -267,7 +268,7 @@ impl Compile {
                 self.add(Instr::Copy(expr_index, value_index))
             }
 
-            Expr::Literal(Literal::Func(func)) => {
+            Expr::Func(func) => {
                 let num_param = func.params.len();
 
                 self.current_outer_blocks
@@ -324,29 +325,6 @@ impl Compile {
                 ))
             }
 
-            Expr::Var(id) => {
-                if let Some(value_index) = self.var(&id) {
-                    self.add(Instr::Copy(expr_index, value_index));
-                    if self.current_block.promoted_indexes.contains(&value_index) {
-                        self.add(Instr::Demote(expr_index))
-                    }
-                } else if let Some(captured_index) = self.try_capture(&id) {
-                    self.add(Instr::GetCaptured(expr_index, captured_index))
-                } else {
-                    return Err(CompileError::UnknownVariable(id));
-                }
-            }
-
-            Expr::Compound(stmts, expr) => {
-                self.current_block.scopes.push(Default::default());
-                for stmt in stmts {
-                    self.input_stmt(stmt, asset)?
-                }
-                let value_index = self.current_block.expr_index;
-                self.input_expr(*expr, asset)?;
-                self.add(Instr::Copy(expr_index, value_index));
-                self.current_block.scopes.pop().unwrap();
-            }
             Expr::Match(match_expr) => {
                 self.input_expr(match_expr.scrutinee, asset)?;
                 let mut hit_jumps = Vec::new();
@@ -383,6 +361,46 @@ impl Compile {
                 };
                 *target = after_target
             }
+
+            Expr::Var(id) => {
+                if let Some(value_index) = self.var(&id) {
+                    self.add(Instr::Copy(expr_index, value_index));
+                    if self.current_block.promoted_indexes.contains(&value_index) {
+                        self.add(Instr::Demote(expr_index))
+                    }
+                } else if let Some(captured_index) = self.try_capture(&id) {
+                    self.add(Instr::GetCaptured(expr_index, captured_index))
+                } else {
+                    return Err(CompileError::UnknownVariable(id));
+                }
+            }
+
+            Expr::Compound(stmts, expr) => {
+                self.current_block.scopes.push(Default::default());
+                for stmt in stmts {
+                    self.input_stmt(stmt, asset)?
+                }
+                let value_index = self.current_block.expr_index;
+                self.input_expr(*expr, asset)?;
+                self.add(Instr::Copy(expr_index, value_index));
+                self.current_block.scopes.pop().unwrap();
+            }
+
+            Expr::Type(attrs) => {
+                let attrs = attrs.into_iter().map(|attr| asset.intern(attr)).collect();
+                self.add(Instr::MakeRecordType(expr_index, RecordLayout(attrs)))
+            }
+            Expr::Record(type_expr, attr_exprs) => {
+                self.input_expr(*type_expr, asset)?;
+                let mut attrs = Vec::new();
+                for (i, (name, expr)) in attr_exprs.into_iter().enumerate() {
+                    self.current_block.expr_index = expr_index + 1 + i;
+                    attrs.push((asset.intern(name), self.current_block.expr_index));
+                    self.input_expr(expr, asset)?
+                }
+                self.add(Instr::MakeRecord(expr_index, expr_index, attrs))
+            }
+
             Expr::Op(op, args) => {
                 let num_arg = args.len();
                 for (i, arg) in args.into_iter().enumerate() {
@@ -402,6 +420,10 @@ impl Compile {
                     }
                     _ => unimplemented!(),
                 }
+            }
+            Expr::GetAttr(expr, attr) => {
+                self.input_expr(*expr, asset)?;
+                self.add(Instr::GetAttr(expr_index, expr_index, asset.intern(attr)))
             }
 
             Expr::Literal(Literal::Unit) => self.add(Instr::MakeUnit(expr_index)),

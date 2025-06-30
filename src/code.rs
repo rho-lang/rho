@@ -33,16 +33,19 @@ pub enum Expr {
     Import(String, String),
     Var(String),
 
-    Compound(Vec<Stmt>, Box<Expr>),
-    Call(Box<Expr>, Vec<Expr>),
+    Type(Vec<String>),
     Op(String, Vec<Expr>),
+    GetAttr(Box<Expr>, String),
+    Call(Box<Expr>, Vec<Expr>),
     Match(Box<syntax::Match>),
+    Record(Box<Expr>, Vec<(String, Expr)>),
+    Compound(Vec<Stmt>, Box<Expr>),
+    Func(Func),
 }
 
 #[derive(Debug)]
 pub enum Literal {
     Unit,
-    Func(Func),
     Future, // the synchronization object
     String(String),
     I32(i32),
