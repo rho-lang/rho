@@ -36,6 +36,7 @@ impl TypeId {
     // following Python's terminology
     pub const CELL: Self = Self(3);
     pub const FUTURE: Self = Self(4);
+    pub const SLICE: Self = Self(10); // from this point i decide to not renumber the types
 
     // core record types
     pub const UNIT: Self = Self(5);
