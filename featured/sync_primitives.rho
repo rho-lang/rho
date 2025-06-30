@@ -1,12 +1,17 @@
 !input ../lang
-@import lang[trace, sleep]
+@import lang[trace]
+@import lang.oracle[yield]
 
 let fut = future
 spawn func() {
-    trace("[sleep] start")
-    wait sleep("10ms")
+    trace("[task#1] start")
+    yield()
+    trace("[task#1] yielded")
     notify fut
-    trace("[sleep] notified")
+    trace("[task#1] notified")
+}
+spawn func() {
+    trace("[task#2] finish")
 }
 trace("[main] spawned")
 wait fut

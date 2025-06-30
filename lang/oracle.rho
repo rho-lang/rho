@@ -1,0 +1,14 @@
+@package lang.oracle
+
+let yield_fut = future
+
+let yield = func() {
+    wait yield_fut
+}
+%export yield
+
+let advance = func() {
+    notify yield_fut
+    yield_fut = future
+}
+intrinsic oracle_advance (advance)
