@@ -72,12 +72,6 @@ struct String {
     len: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Slice {
-    buf: SpaceAddr,
-    len: usize,
-}
-
 #[derive(Debug, Default)]
 pub struct Eval {
     frames: Vec<Frame>,
@@ -524,22 +518,6 @@ impl Value {
         Ok(*unsafe { space.typed_get(self.data as _) })
     }
 
-    // Slice
-    fn alloc_slice(space: &mut Space, len: usize) -> Result<Self, OutOfSpace> {
-        let buf = space.alloc(len, align_of::<Value>())?;
-        let addr = space.typed_alloc::<Slice>()?;
-        unsafe { space.typed_write(addr, Slice { buf, len }) }
-        Ok(Self {
-            type_id: TypeId::SLICE,
-            data: addr as _,
-        })
-    }
-
-    fn load_slice(&self, space: &Space) -> Result<Slice, TypeError> {
-        self.ensure_type(TypeId::SLICE)?;
-        Ok(*unsafe { space.typed_get(self.data as _) })
-    }
-
     // unit type
     fn new_unit() -> Self {
         Self {
@@ -568,6 +546,12 @@ impl Value {
         })
     }
 
+    fn get_str<'a>(&self, space: &'a Space) -> Result<&'a str, TypeError> {
+        self.ensure_type(TypeId::STRING)?;
+        let string = unsafe { space.typed_get::<String>(self.data as _) };
+        Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
+    }
+
     // i32 type
     fn new_i32(value: i32) -> Self {
         let mut data = [0; size_of::<u64>()];
@@ -583,12 +567,6 @@ impl Value {
         let mut value = [0; size_of::<i32>()];
         value.copy_from_slice(&self.data.to_ne_bytes()[..size_of::<i32>()]);
         Ok(i32::from_ne_bytes(value))
-    }
-
-    fn get_string<'a>(&self, space: &'a Space) -> Result<&'a str, TypeError> {
-        self.ensure_type(TypeId::STRING)?;
-        let string = unsafe { space.typed_get::<String>(self.data as _) };
-        Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
     // boolean types
@@ -644,7 +622,8 @@ pub mod intrinsics {
     use crate::{
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
-        eval::{ExecuteError, Future, Value, value_slice_load, value_slice_store},
+        eval::{ExecuteError, Future, TypeError, Value, value_slice_load, value_slice_store},
+        space::SpaceAddr,
         typing::TypeId,
         worker::WorkerContext,
     };
@@ -682,7 +661,7 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let message = values[indexes[0]].get_string(&context.space)?;
+        let message = values[indexes[0]].get_str(&context.space)?;
         tracing::info!(message);
         Ok(())
     }
@@ -723,13 +702,35 @@ pub mod intrinsics {
         Ok(())
     }
 
+    struct Slice(SpaceAddr);
+
+    impl Value {
+        // slice type
+        fn new_slice(Slice(addr): Slice) -> Self {
+            Self {
+                type_id: TypeId::SLICE,
+                data: addr as _,
+            }
+        }
+
+        fn load_slice(&self) -> Result<Slice, TypeError> {
+            self.ensure_type(TypeId::SLICE)?;
+            Ok(Slice(self.data as _))
+        }
+    }
+
     fn slice_new(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
         let len = values[indexes[1]].load_i32()?;
-        values[indexes[0]] = Value::alloc_slice(&mut context.space, len as _)?;
+        let slice = Slice(
+            context
+                .space
+                .alloc(size_of::<Value>() * len as usize, align_of::<Value>())?,
+        );
+        values[indexes[0]] = Value::new_slice(slice);
         Ok(())
     }
 
@@ -738,9 +739,9 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let slice = values[indexes[1]].load_slice(&context.space)?;
+        let Slice(buf) = values[indexes[1]].load_slice()?;
         let pos = values[indexes[2]].load_i32()?;
-        values[indexes[0]] = unsafe { value_slice_load(&context.space, slice.buf, pos as _) };
+        values[indexes[0]] = unsafe { value_slice_load(&context.space, buf, pos as _) };
         Ok(())
     }
 
@@ -749,9 +750,9 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let slice = values[indexes[1]].load_slice(&context.space)?;
+        let Slice(buf) = values[indexes[1]].load_slice()?;
         let pos = values[indexes[2]].load_i32()?;
-        unsafe { value_slice_store(&mut context.space, slice.buf, pos as _, values[indexes[0]]) }
+        unsafe { value_slice_store(&mut context.space, buf, pos as _, values[indexes[0]]) }
         Ok(())
     }
 
@@ -762,13 +763,14 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let src = values[indexes[0]].load_slice(&context.space)?;
-        let dst = values[indexes[1]].load_slice(&context.space)?;
+        let Slice(src) = values[indexes[0]].load_slice()?;
+        let Slice(dst) = values[indexes[1]].load_slice()?;
+        let len = values[indexes[2]].load_i32()?;
         unsafe {
             copy_nonoverlapping(
-                context.space.typed_get::<Value>(src.buf),
-                context.space.typed_get_mut(dst.buf),
-                src.len,
+                context.space.typed_get::<Value>(src),
+                context.space.typed_get_mut(dst),
+                len as _,
             );
         }
         Ok(())
