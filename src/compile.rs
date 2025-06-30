@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     asset::Asset,
-    code::{Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Stmt, ValueIndex},
+    code::{Block, CaptureSource, Expr, Instr, InstrIndex, Literal, Op2, Stmt, ValueIndex},
     eval::Closure,
 };
 
@@ -343,7 +343,22 @@ impl Compile {
                 self.current_block.scopes.pop().unwrap();
             }
             Expr::Match(_) => todo!(),
-            Expr::Op(op, args) => todo!(),
+            Expr::Op(op, args) => {
+                let num_arg = args.len();
+                for (i, arg) in args.into_iter().enumerate() {
+                    self.current_block.expr_index = expr_index + i;
+                    self.input_expr(arg, asset)?;
+                }
+                match (&*op, num_arg) {
+                    ("+", 2) => {
+                        self.add(Instr::Op2(expr_index, Op2::Add, expr_index, expr_index + 1))
+                    }
+                    ("-", 2) => {
+                        self.add(Instr::Op2(expr_index, Op2::Sub, expr_index, expr_index + 1))
+                    }
+                    _ => unimplemented!(),
+                }
+            }
 
             Expr::Literal(Literal::Unit) => self.add(Instr::MakeUnit(expr_index)),
             Expr::Literal(Literal::String(string)) => {
