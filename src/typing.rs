@@ -5,6 +5,24 @@ use crate::asset::{Asset, StringId};
 #[derive(Debug, Clone)]
 pub struct RecordLayout(pub Vec<StringId>);
 
+// a newtype for dual purposes. first it gives us chance to define
+// type-associated constants for essential types and customize debug format.
+// second, it is the presentation of "type" type that appears in the virtual
+// machine. for example
+// let MyType = type (foo, bar, baz)
+// creates a TypeId Value { type_id: TypeId::TYPE_ID, data: TypeId(123) } on the
+// call frame, while a RecordLayout is registered for TypeId(123) in 
+// TypeRegistry
+// it is possible (or even preferred) to store the type metadata directly on the
+// heap (i.e. Space) and use its SpaceAddr as id. the rationale for a dedicated
+// storage (i.e. TypeRegistry) is to compress TypeId domain to 24 bits, expected
+// by `Value`'s layout (see its comments for reference). if storing on the heap,
+// the SpaceAddr will be scattered in a 40-bit address space
+// the major downside of current design may be it impedes garbage collection of
+// unused type definitions. i don't think it would be a common practice to
+// define tremendous (unused) types. and if (really) necessary, "type marking"
+// can be integrated into garbage collection to identify types without any
+// reachable instantiated records and/or TypeId
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct TypeId(pub u32);
 

@@ -2,6 +2,7 @@ Deque
 humantime
 instrs
 miri
+newtype
 reborrow
 Sched
 scrutinee
