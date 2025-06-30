@@ -626,10 +626,12 @@ pub mod intrinsics {
     };
 
     pub fn preload(asset: &mut Asset) {
+        START.with(|_| {}); // initialize the thread-local variable
         asset.intrinsics = [
             ("trace", trace as Intrinsic),
             ("oracle_advance_future", oracle_advance_future),
             ("type_object", type_object),
+            ("time_since_start", time_since_start),
         ]
         .map(|(s, f)| (s.into(), f))
         .into()
@@ -674,6 +676,22 @@ pub mod intrinsics {
     ) -> Result<(), ExecuteError> {
         let id = values[indexes[1]].load_i32()?;
         values[indexes[0]] = Value::new_type_id(TypeId(id as _));
+        Ok(())
+    }
+
+    thread_local!(static START: std::time::Instant = std::time::Instant::now());
+    fn time_since_start(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        _: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let duration = START.with(|start| start.elapsed());
+        assert!(
+            duration.as_secs() < i32::MAX as _,
+            "program has running for too long"
+        );
+        values[indexes[0]] = Value::new_i32(duration.as_secs() as _);
+        values[indexes[1]] = Value::new_i32(duration.subsec_nanos() as _);
         Ok(())
     }
 }

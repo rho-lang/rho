@@ -40,7 +40,7 @@ impl TypeId {
     // core record types
     pub const UNIT: Self = Self(5);
 
-    // essential (native) types
+    // essential native (or marker) types
     pub const STRING: Self = Self(6);
     pub const I32: Self = Self(7);
     pub const TRUE: Self = Self(8);

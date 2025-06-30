@@ -2,9 +2,11 @@ Deque
 humantime
 instrs
 miri
+nanos
 newtype
 reborrow
 Sched
 scrutinee
+subsec_nanos
 thiserror
 walkdir
