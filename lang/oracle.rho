@@ -2,7 +2,9 @@
 
 let yield_fut = future
 
+let num_yielded = 0
 let yield = func() {
+    num_yielded = num_yielded + 1
     wait yield_fut
 }
 @export yield
@@ -13,6 +15,7 @@ spawn func() {
         wait oracle_advance
         # TODO count the yielded tasks and only break when no more task yielded
         notify yield_fut
+        num_yielded = 0
         break
     }
 }

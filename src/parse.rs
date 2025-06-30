@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{num::ParseIntError, str::FromStr};
 
 use thiserror::Error;
 
@@ -16,6 +16,8 @@ pub enum ParseError {
     Expect(&'static str),
     #[error("invalid package")]
     InvalidPackage,
+    #[error("{0}")]
+    Int(#[from] ParseIntError),
 }
 
 impl FromStr for Source {
@@ -93,9 +95,16 @@ fn parse_directive(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
 
 fn parse_expr(s: &mut &str) -> Result<Expr, ParseError> {
     let mut expr = parse_atomic_expr(s)?;
-    while let Some(rest) = trim(s).strip_prefix('(') {
-        *s = trim(rest);
-        expr = parse_call(s, expr)?
+    loop {
+        *s = trim(s);
+        if let Some(rest) = s.strip_prefix('(') {
+            *s = trim(rest);
+            expr = parse_call(s, expr)?
+        } else if s.starts_with(['+', '-', '*', '/', '%']) {
+            expr = parse_infix(s, expr)?
+        } else {
+            break;
+        }
     }
     Ok(expr)
 }
@@ -118,10 +127,12 @@ fn parse_atomic_expr(s: &mut &str) -> Result<Expr, ParseError> {
             return method(s);
         }
     }
-    if s.starts_with(|c: char| c.is_alphabetic()) {
+    if s.starts_with(char::is_alphabetic) {
         parse_var(s)
+    } else if s.starts_with(|c: char| c.is_ascii_digit()) {
+        parse_i32(s)
     } else {
-        Err(ParseError::Expect("expression"))
+        Err(ParseError::Expect("atomic expression"))
     }
 }
 
@@ -265,10 +276,29 @@ fn parse_var(s: &mut &str) -> Result<Expr, ParseError> {
     Ok(Expr::Var(extract_identifier(s)?.into()))
 }
 
+fn parse_i32(s: &mut &str) -> Result<Expr, ParseError> {
+    let value_str = s
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>();
+    *s = s.strip_prefix(&value_str).unwrap();
+    Ok(Expr::Literal(Literal::I32(value_str.parse()?)))
+}
+
 fn parse_call(s: &mut &str, closure: Expr) -> Result<Expr, ParseError> {
     let args = extract_args(s);
     *s = consume(trim(s), ')', "closing parenthesis of argument list")?;
     Ok(Expr::Call(closure.into(), args))
+}
+
+fn parse_infix(s: &mut &str, lhs: Expr) -> Result<Expr, ParseError> {
+    for op in ["+", "-"] {
+        if let Some(rest) = s.strip_prefix(op) {
+            *s = trim(rest);
+            return Ok(Expr::Op(op.into(), vec![lhs, parse_expr(s)?]));
+        }
+    }
+    Err(ParseError::Expect("infix operator"))
 }
 
 // helpers
