@@ -1,3 +1,9 @@
+use std::borrow::BorrowMut;
+
+use thiserror::Error;
+
+use crate::task::Task;
+
 #[derive(Default)]
 pub struct Space {
     buf: Vec<u8>,
@@ -13,14 +19,28 @@ impl Space {
             alloc_addr: 0,
         }
     }
+}
 
-    pub fn alloc(&mut self, size: usize, align: usize) -> SpaceAddr {
+#[derive(Debug, Error)]
+#[error("running out of space while requesting {0} bytes")]
+pub struct OutOfSpace(pub usize);
+
+impl Space {
+    pub fn alloc(&mut self, size: usize, align: usize) -> Result<SpaceAddr, OutOfSpace> {
         let addr = self.alloc_addr + (&self.buf[self.alloc_addr] as *const u8).align_offset(align);
         if addr + size > self.buf.len() {
-            // TODO
+            return Err(OutOfSpace(size));
         }
         self.alloc_addr = addr + size;
-        addr
+        Ok(addr)
+    }
+
+    pub fn copy_collect(
+        &mut self,
+        OutOfSpace(requested_size): OutOfSpace,
+        tasks: impl Iterator<Item = impl BorrowMut<Task>>,
+    ) {
+        todo!()
     }
 
     pub fn get(&self, addr: SpaceAddr, size: usize) -> &[u8] {
@@ -33,7 +53,7 @@ impl Space {
         &mut self.buf[addr..addr + size]
     }
 
-    pub fn typed_alloc<T>(&mut self) -> SpaceAddr {
+    pub fn typed_alloc<T>(&mut self) -> Result<SpaceAddr, OutOfSpace> {
         self.alloc(size_of::<T>(), align_of::<T>())
     }
 

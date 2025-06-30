@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem::replace};
 
 use crate::{
     asset::Asset,
-    eval::{Closure, Eval},
+    eval::{Closure, Eval, ExecuteError},
     oracle::Oracle,
     sched::{Sched, SchedStatus},
-    space::Space,
+    space::{OutOfSpace, Space},
     task::{RunStatus, Task},
     typing::TypeRegistry,
 };
@@ -37,15 +37,22 @@ pub fn run(main_closure: Closure, mut registry: TypeRegistry, asset: &Asset) {
                 }
             }
         };
-        let task = tasks.get_mut(&task_id).expect("task {task_id} exists");
-        match task.run(&mut space, &mut registry, &mut sched, &mut oracle, asset) {
-            Ok(RunStatus::Exited) => {
-                tasks.remove(&task_id);
-            }
-            Ok(RunStatus::Waiting(notify_token)) => sched.block(task_id, notify_token),
-            Err(err) => {
-                tracing::error!(%task_id, %err, "task failed");
-                tasks.remove(&task_id);
+        let mut task_ready = true;
+        while replace(&mut task_ready, false) {
+            let task = tasks.get_mut(&task_id).expect("task {task_id} exists");
+            match task.run(&mut space, &mut registry, &mut sched, &mut oracle, asset) {
+                Ok(RunStatus::Waiting(notify_token)) => sched.block(task_id, notify_token),
+                Ok(RunStatus::Exited) => {
+                    tasks.remove(&task_id);
+                }
+                Err(ExecuteError::Space(out_of_space @ OutOfSpace(_))) => {
+                    space.copy_collect(out_of_space, tasks.values_mut());
+                    task_ready = true
+                }
+                Err(err) => {
+                    tracing::error!(%task_id, %err, "task failed");
+                    tasks.remove(&task_id);
+                }
             }
         }
     }

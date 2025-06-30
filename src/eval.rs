@@ -7,7 +7,7 @@ use crate::{
     code::{CaptureSource, Instr, InstrIndex},
     oracle::{Oracle, OracleError},
     sched::{NotifyToken, Sched},
-    space::{Space, SpaceAddr},
+    space::{OutOfSpace, Space, SpaceAddr},
     task::Task,
     typing::{RecordLayout, TypeId, TypeRegistry},
 };
@@ -139,6 +139,8 @@ pub enum ExecuteStatus {
 #[derive(Error, Debug)]
 pub enum ExecuteError {
     #[error("{0}")]
+    Space(#[from] OutOfSpace),
+    #[error("{0}")]
     Type(#[from] TypeError),
     #[error("{0}")]
     Arity(#[from] ArityError),
@@ -170,8 +172,13 @@ impl Eval {
             let block = asset.get_block(frame.closure.block_id);
             // optimize for sequentially execute instructions
             for instr in &block.instrs[frame.instr_pointer..] {
+                // invariant: instr = block.instrs[frame.instr_pointer]
+                // at the end of this loop, instr_pointer is incremented to maintain this
+                // invariant. the increment is at the end for re-executing failed instructions
+                // in recoverable cases like OutOfSpace. also, every adjustment of instr_pointer
+                // (for control flow) is followed by a `break` or `continue` of the outer
+                // `'control`
                 tracing::trace!(%frame.instr_pointer, %block.name, ?instr, "execute");
-                frame.instr_pointer += 1;
                 match instr {
                     Instr::Jump(instr_index, cond) => {
                         if match cond {
@@ -186,6 +193,57 @@ impl Eval {
                         }
                     }
 
+                    Instr::Spawn(closure) => {
+                        let mut eval = Self::new();
+                        eval.init(frame.values[*closure].load_closure(space)?, asset)?;
+                        sched.spawn(Task::new(eval));
+                    }
+                    Instr::Call(dst, closure, args) => {
+                        let closure_value = frame.values[*closure];
+                        let arg_values = args
+                            .iter()
+                            .map(|arg| frame.values[*arg])
+                            .collect::<Vec<_>>();
+                        let replaced = frame.call_dst.replace(*dst);
+                        assert!(replaced.is_none());
+                        // borrow to `self` via `frame` ends here
+                        self.push_frame(closure_value.load_closure(space)?, &arg_values, asset)?;
+                        // reborrow
+                        frame = self.frames.last_mut().expect("last frame exists");
+                        continue 'control;
+                    }
+                    Instr::Return(index) => {
+                        let return_value = frame.values[*index];
+                        // borrow to `self` via `frame` ends here
+                        self.frames.pop();
+                        let Some(last_frame) = self.frames.last_mut() else {
+                            return_value.load_unit()?; // should we make a dedicated error variant?
+                            break 'control Ok(ExecuteStatus::Exited);
+                        };
+                        // reborrow
+                        frame = last_frame;
+                        let dst = frame.call_dst.take().expect("call destination must be set");
+                        frame.values[dst] = return_value;
+                        frame.instr_pointer += 1; // current Call instruction is done
+                        continue 'control;
+                    }
+
+                    Instr::MakeFuture(dst) => {
+                        // leaking a NotifyToken should be fine
+                        let future = Future(sched.alloc_notify_token());
+                        frame.values[*dst] = Value::alloc_future(future, space)?
+                    }
+                    Instr::Wait(future) => {
+                        let Future(notify_token) = frame.values[*future].load_future(space)?;
+                        // on the next `execute`, start from the next instruction
+                        frame.instr_pointer += 1;
+                        break 'control Ok(ExecuteStatus::Waiting(notify_token));
+                    }
+                    Instr::Notify(future) => {
+                        let Future(notify_token) = frame.values[*future].load_future(space)?;
+                        sched.notify(notify_token)
+                    }
+
                     Instr::Intrinsic(intrinsic, indexes) => {
                         intrinsic(&mut frame.values, indexes, space, oracle)?
                     }
@@ -194,30 +252,12 @@ impl Eval {
                         frame.values[*dst] = src_value
                     }
 
-                    Instr::MakeUnit(dst) => frame.values[*dst] = Value::new_unit(),
-                    Instr::MakeString(dst, literal) => {
-                        frame.values[*dst] = Value::alloc_string(literal, space)
-                    }
-
-                    Instr::MakeFuture(dst) => {
-                        let future = Future(sched.alloc_notify_token());
-                        frame.values[*dst] = Value::alloc_future(future, space)
-                    }
-                    Instr::Wait(future) => {
-                        let Future(notify_token) = frame.values[*future].load_future(space)?;
-                        return Ok(ExecuteStatus::Waiting(notify_token));
-                    }
-                    Instr::Notify(future) => {
-                        let Future(notify_token) = frame.values[*future].load_future(space)?;
-                        sched.notify(notify_token)
-                    }
-
                     Instr::MakeClosure(dst, block_id) => {
-                        let closure_value = Value::alloc_closure(Closure::new(*block_id), space);
+                        let closure_value = Value::alloc_closure(Closure::new(*block_id), space)?;
                         frame.values[*dst] = closure_value
                     }
                     Instr::Promote(index) => {
-                        frame.values[*index] = Value::alloc_cell(frame.values[*index], space)
+                        frame.values[*index] = Value::alloc_cell(frame.values[*index], space)?
                     }
                     Instr::Capture(dst, source) => {
                         let addr = match source {
@@ -257,39 +297,6 @@ impl Eval {
                         dst_value.ensure_type(TypeId::CELL).unwrap();
                         unsafe { store_record_attr(space, dst_value.data, 0, frame.values[*src]) }
                     }
-                    Instr::Spawn(closure) => {
-                        let mut eval = Self::new();
-                        eval.init(frame.values[*closure].load_closure(space)?, asset)?;
-                        sched.spawn(Task::new(eval));
-                    }
-                    Instr::Call(dst, closure, args) => {
-                        let closure_value = frame.values[*closure];
-                        let arg_values = args
-                            .iter()
-                            .map(|arg| frame.values[*arg])
-                            .collect::<Vec<_>>();
-                        let replaced = frame.call_dst.replace(*dst);
-                        assert!(replaced.is_none());
-                        // borrow to `self` via `frame` ends here
-                        self.push_frame(closure_value.load_closure(space)?, &arg_values, asset)?;
-                        // reborrow
-                        frame = self.frames.last_mut().expect("last frame exists");
-                        continue 'control;
-                    }
-                    Instr::Return(index) => {
-                        let return_value = frame.values[*index];
-                        // borrow to `self` via `frame` ends here
-                        self.frames.pop();
-                        let Some(last_frame) = self.frames.last_mut() else {
-                            return_value.load_unit()?; // should we make a dedicated error variant?
-                            break 'control Ok(ExecuteStatus::Exited);
-                        };
-                        // reborrow
-                        frame = last_frame;
-                        let dst = frame.call_dst.take().expect("call destination must be set");
-                        frame.values[dst] = return_value;
-                        continue 'control;
-                    }
 
                     Instr::MakeRecordType(dst, layout) => {
                         let type_id = registry.add_record_type(layout.clone());
@@ -305,14 +312,16 @@ impl Eval {
                             let Some(pos) =
                                 layout.iter().position(|layout_attr| layout_attr == attr)
                             else {
-                                return Err(ExecuteError::UnexpectedAttr("TODO".into()));
+                                return Err(ExecuteError::UnexpectedAttr(
+                                    asset.get_string(*attr).into(),
+                                ));
                             };
                             record_attrs[pos] = frame.values[*index]
                         }
                         if attrs.len() != layout.len() {
                             return Err(ExecuteError::MissingAttr);
                         }
-                        frame.values[*dst] = Value::alloc_record(type_id, record_attrs, space)
+                        frame.values[*dst] = Value::alloc_record(type_id, record_attrs, space)?
                     }
                     Instr::GetAttr(dst, record, attr) => {
                         let record_value = &frame.values[*record];
@@ -347,7 +356,14 @@ impl Eval {
                             store_record_attr(space, record_value.data, pos, frame.values[*index])
                         }
                     }
+
+                    Instr::MakeUnit(dst) => frame.values[*dst] = Value::new_unit(),
+                    Instr::MakeString(dst, literal) => {
+                        frame.values[*dst] = Value::alloc_string(literal, space)?
+                    }
                 }
+
+                frame.instr_pointer += 1;
             }
             unreachable!("block should terminate with Return")
         }
@@ -386,7 +402,7 @@ impl Value {
 
     // helper methods for essential types
     // new_x        (X) -> Self                     construct inline type
-    // alloc_x      (X, &mut Space) -> Self         construct heap-allocated type
+    // alloc_x      (X, &mut Space) -> Self?        construct heap-allocated type
     // load_x       (&self) -> X?                   access inline type
     // store_x      (&self, X) -> ()?
     // load_x       (&self, &Space) -> X?           access heap-allocated type with
@@ -418,13 +434,13 @@ impl Value {
     }
 
     // Closure
-    fn alloc_closure(closure: Closure, space: &mut Space) -> Self {
-        let addr = space.typed_alloc::<Closure>();
+    fn alloc_closure(closure: Closure, space: &mut Space) -> Result<Self, OutOfSpace> {
+        let addr = space.typed_alloc::<Closure>()?;
         unsafe { space.typed_write(addr, closure) }
-        Self {
+        Ok(Self {
             type_id: TypeId::CLOSURE,
             data: addr,
-        }
+        })
     }
 
     fn load_closure(&self, space: &Space) -> Result<Closure, TypeError> {
@@ -438,24 +454,24 @@ impl Value {
     }
 
     // cell type
-    fn alloc_cell(value: Value, space: &mut Space) -> Self {
-        let addr = space.typed_alloc::<Value>();
+    fn alloc_cell(value: Value, space: &mut Space) -> Result<Self, OutOfSpace> {
+        let addr = space.typed_alloc::<Value>()?;
         unsafe { space.typed_write(addr, value) }
-        Self {
+        Ok(Self {
             type_id: TypeId::CELL,
             data: addr,
-        }
+        })
     }
     // access to cell is performed directly with SpaceAddr, not going through Value
 
     // Future
-    fn alloc_future(future: Future, space: &mut Space) -> Self {
-        let addr = space.typed_alloc::<Future>();
+    fn alloc_future(future: Future, space: &mut Space) -> Result<Self, OutOfSpace> {
+        let addr = space.typed_alloc::<Future>()?;
         unsafe { space.typed_write(addr, future) };
-        Self {
+        Ok(Self {
             type_id: TypeId::FUTURE,
             data: addr,
-        }
+        })
     }
 
     fn load_future(&self, space: &Space) -> Result<Future, TypeError> {
@@ -477,16 +493,18 @@ impl Value {
     }
 
     // String
-    fn alloc_string(literal: &str, space: &mut Space) -> Self {
+    fn alloc_string(literal: &str, space: &mut Space) -> Result<Self, OutOfSpace> {
         let len = literal.len();
-        let addr = space.typed_alloc::<String>();
-        let buf = space.alloc(len, 1);
+        // allocate buffer first, otherwise if buffer fails to allocate while String
+        // itself succeeds, marking String would encounter invalid SpaceAddr
+        let buf = space.alloc(len, 1)?;
         space.get_mut(buf, len).copy_from_slice(literal.as_bytes());
+        let addr = space.typed_alloc::<String>()?;
         unsafe { space.typed_write(addr, String { buf, len }) }
-        Self {
+        Ok(Self {
             type_id: TypeId::STRING,
             data: addr,
-        }
+        })
     }
 
     fn get_string<'a>(&self, space: &'a Space) -> Result<&'a str, TypeError> {
@@ -496,8 +514,12 @@ impl Value {
     }
 
     // record types
-    fn alloc_record(type_id: TypeId, attrs: Vec<Value>, space: &mut Space) -> Self {
-        let addr = space.alloc(size_of::<Value>() * attrs.len(), align_of::<Value>());
+    fn alloc_record(
+        type_id: TypeId,
+        attrs: Vec<Value>,
+        space: &mut Space,
+    ) -> Result<Self, OutOfSpace> {
+        let addr = space.alloc(size_of::<Value>() * attrs.len(), align_of::<Value>())?;
         let buf = space
             .get_mut(addr, size_of::<Value>() * attrs.len())
             .as_mut_ptr()
@@ -506,10 +528,10 @@ impl Value {
         for (dst, src) in record_attrs.iter_mut().zip(attrs) {
             *dst = src
         }
-        Self {
+        Ok(Self {
             type_id,
             data: addr,
-        }
+        })
     }
 }
 
