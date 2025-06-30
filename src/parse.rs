@@ -97,22 +97,33 @@ fn parse_directive(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
 }
 
 fn parse_expr(s: &mut &str) -> Result<Expr, ParseError> {
-    let mut expr = parse_atomic_expr(s)?;
+    parse_expr0(s)
+}
+
+fn parse_expr0(s: &mut &str) -> Result<Expr, ParseError> {
+    let expr1 = parse_expr1(s)?;
+    parse_infix(s, expr1, ["!=", "=="], parse_expr1)
+}
+
+fn parse_expr1(s: &mut &str) -> Result<Expr, ParseError> {
+    let expr1 = parse_expr2(s)?;
+    parse_infix(s, expr1, ["+", "-"], parse_expr2)
+}
+
+fn parse_expr2(s: &mut &str) -> Result<Expr, ParseError> {
+    let mut expr = parse_expr3(s)?;
     loop {
         *s = trim(s);
         if let Some(rest) = s.strip_prefix('(') {
             *s = trim(rest);
-            expr = parse_call(s, expr)?
-        } else if s.starts_with(['+', '-', '*', '/', '%']) {
-            expr = parse_infix(s, expr)?
-        } else {
-            break;
+            expr = parse_call(s, expr)?;
+            continue;
         }
+        break Ok(expr);
     }
-    Ok(expr)
 }
 
-fn parse_atomic_expr(s: &mut &str) -> Result<Expr, ParseError> {
+fn parse_expr3(s: &mut &str) -> Result<Expr, ParseError> {
     for (prefix, method) in [
         (
             "{",
@@ -307,14 +318,23 @@ fn parse_call(s: &mut &str, closure: Expr) -> Result<Expr, ParseError> {
     Ok(Expr::Call(closure.into(), args))
 }
 
-fn parse_infix(s: &mut &str, lhs: Expr) -> Result<Expr, ParseError> {
-    for op in ["+", "-"] {
-        if let Some(rest) = s.strip_prefix(op) {
-            *s = trim(rest);
-            return Ok(Expr::Op(op.into(), vec![lhs, parse_expr(s)?]));
+fn parse_infix(
+    s: &mut &str,
+    lhs: Expr,
+    ops: impl IntoIterator<Item = &'static str> + Clone,
+    parse_rhs: fn(&mut &str) -> Result<Expr, ParseError>,
+) -> Result<Expr, ParseError> {
+    let mut expr = lhs;
+    'expr: loop {
+        for op in ops.clone() {
+            if let Some(rest) = s.strip_prefix(op) {
+                *s = trim(rest);
+                expr = Expr::Op(op.into(), vec![expr, parse_rhs(s)?]);
+                continue 'expr;
+            }
         }
+        break Ok(expr);
     }
-    Err(ParseError::Expect("infix operator"))
 }
 
 // helpers
