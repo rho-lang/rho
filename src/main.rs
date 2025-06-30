@@ -65,7 +65,7 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
                 for entry in WalkDir::new(input) {
                     let entry = entry?;
                     let path = entry.path();
-                    if path.is_file() && path.extension() == Some("foil".as_ref()) {
+                    if path.is_file() && path.extension() == Some("rho".as_ref()) {
                         walk(path, compile, asset)?
                     }
                 }
