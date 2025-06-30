@@ -11,7 +11,9 @@ let yield = func() {
 }
 @export yield
 
-let sleep = func() {
+let Delayed = type[at, fut]
+# let delayed_notifies
+let sleep = func(duration) {
     # TODO
 }
 
