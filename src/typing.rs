@@ -43,6 +43,8 @@ impl TypeId {
     // essential (native) types
     pub const STRING: Self = Self(6);
     pub const I32: Self = Self(7);
+    pub const TRUE: Self = Self(8);
+    pub const FALSE: Self = Self(9);
 
     pub const RESERVED_MAX: Self = Self(100);
 }

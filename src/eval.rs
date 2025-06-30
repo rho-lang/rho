@@ -390,12 +390,14 @@ impl Eval {
 
                     Instr::Op2(dst, op, a, b) => {
                         let dst_value = match op {
-                            Op2::Add | Op2::Sub => {
+                            Op2::Add | Op2::Sub | Op2::Eq | Op2::Ne => {
                                 let a = frame.values[*a].load_i32()?;
                                 let b = frame.values[*b].load_i32()?;
                                 match op {
                                     Op2::Add => Value::new_i32(a + b),
                                     Op2::Sub => Value::new_i32(a - b),
+                                    Op2::Eq => Value::new_bool(a == b),
+                                    Op2::Ne => Value::new_bool(a != b),
                                     // _ => unreachable!(),
                                 }
                             }
@@ -565,6 +567,29 @@ impl Value {
         self.ensure_type(TypeId::STRING)?;
         let string = unsafe { space.typed_get::<String>(self.data as _) };
         Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
+    }
+
+    // boolean types
+    pub fn new_true() -> Self {
+        Self {
+            type_id: TypeId::TRUE,
+            data: u64::MAX,
+        }
+    }
+
+    pub fn new_false() -> Self {
+        Self {
+            type_id: TypeId::FALSE,
+            data: u64::MAX,
+        }
+    }
+
+    pub fn new_bool(value: bool) -> Self {
+        if value {
+            Self::new_true()
+        } else {
+            Self::new_false()
+        }
     }
 
     // record types
