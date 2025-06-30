@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let Some(source) = args().nth(1) else {
         return Err("source is not specified".into());
     };
-    let prog = compile_sources(Path::new(&source).canonicalize()?, &mut asset)?;
+    let prog = compile_sources(Path::new(&source), &mut asset)?;
 
     for block_id in 0..=prog.block_id {
         println!("{}", asset.display_block(block_id))
@@ -76,9 +76,9 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
             } else if input.is_dir() {
                 for entry in WalkDir::new(input) {
                     let entry = entry?;
-                    let path = entry.path();
+                    let path = entry.path().canonicalize()?;
                     if path.is_file() && path.extension() == Some("rho".as_ref()) {
-                        walk(path.into(), compile, asset, visited)?
+                        walk(path, compile, asset, visited)?
                     }
                 }
             } else {
@@ -91,7 +91,7 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
 
     let mut compile = Compile::new();
     walk(
-        path.as_ref().into(),
+        path.as_ref().canonicalize()?,
         &mut compile,
         asset,
         &mut Default::default(),
