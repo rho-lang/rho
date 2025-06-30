@@ -102,6 +102,7 @@ impl Compile {
             self.input_stmt(stmt, asset)?
         }
         assert!(self.current_outer_blocks.is_empty());
+        self.current_block.scopes = vec![Default::default()];
 
         let mut package_name = take(&mut self.current_package_name);
         if package_name.is_empty() {
@@ -275,7 +276,18 @@ impl Compile {
                 let Some(&value_index) = package.exports.get(&id) else {
                     return Err(CompileError::InvalidImport(name, id));
                 };
-                self.add(Instr::Copy(expr_index, value_index))
+                // pretty hacky, but seems nothing wrong to me (?)
+                let import_id = format!("@{name}::{id}");
+                if let Some(block) = self.current_outer_blocks.first_mut() {
+                    block
+                } else {
+                    &mut self.current_block
+                }
+                .scopes
+                .first_mut()
+                .unwrap()
+                .insert(import_id.clone(), value_index);
+                self.input_expr(Expr::Var(import_id), asset)?
             }
 
             Expr::Func(func) => {
@@ -305,7 +317,7 @@ impl Compile {
                     name = "(unnamed)".into()
                 }
                 let block = Block {
-                    name,
+                    name: format!("{}::{name}", self.current_package_name),
                     num_param,
                     num_value: func_block.num_value,
                     instrs: func_block.instrs,

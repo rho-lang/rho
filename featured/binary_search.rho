@@ -1,7 +1,8 @@
 !input ../lang
 @import lang[trace]
-@import lang.list[create, push, get, binary_search]
 @import lang.cmp[cmp_int32 = int32]
+@import lang.list[create, push, get, binary_search, Found, InsertAt]
+@import lang.typing[True, False]
 
 let xs = create()
 push(xs, 1)
@@ -16,3 +17,11 @@ push(xs, 14)
 let s = binary_search(xs, 1, cmp_int32)
 match s case Found trace("Found")
 match s.index == 0 case True trace("at index 0")
+
+let s = binary_search(xs, 12, cmp_int32)
+match s case Found trace("Found")
+match s.index == 5 case True trace("at index 5")
+
+let s = binary_search(xs, 5, cmp_int32)
+match s case InsertAt trace("InsertAt")
+match s.index == 4 case True trace("at index 4")

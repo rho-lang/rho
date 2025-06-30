@@ -1,4 +1,6 @@
 @package lang.cmp
+@import lang.typing[True, False]
+
 let LessThan = type
 @export LessThan
 let Equal = type
@@ -8,9 +10,9 @@ let GreaterThan = type
 
 let int32 = func(a, b) {
     match a < b
-        case True LessThan
+        case True new LessThan
         case False match a > b
-            case True GreaterThan
-            case False Equal
+            case True new GreaterThan
+            case False new Equal
 }
 @export int32

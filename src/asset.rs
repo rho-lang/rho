@@ -67,14 +67,14 @@ impl Asset {
                     write!(f, "MakeRecordType({dst}, ...)")?;
                     for &attr in attrs {
                         writeln!(f)?;
-                        write!(f, "       {}(attr)", self.get_string(attr))?
+                        write!(f, "       {}({attr})", self.get_string(attr))?
                     }
                 }
                 MakeRecord(dst, type_id, attrs) => {
                     write!(f, "MakeRecord({dst}, {type_id}, ...)")?;
                     for &(attr, value_index) in attrs {
                         writeln!(f)?;
-                        write!(f, "       {}(attr): <{value_index}>", self.get_string(attr))?
+                        write!(f, "       {}({attr}): <{value_index}>", self.get_string(attr))?
                     }
                 }
                 Intrinsic(native_fn, indexes) => {

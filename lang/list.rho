@@ -1,5 +1,6 @@
 !input cmp
 @package lang.list
+@import lang.typing[True, False]
 
 let List = type[slice, len, cap]
 
@@ -57,19 +58,19 @@ let binary_search = func(list, target, cmp) {
     }
 
     let base = 0
-    loop match size > 1 
-        case False { break }
-        case True {
+    loop match size > 1
+            case False { break }
+            case True {
         let half = size / 2
         let mid = base + half
-        base = match cmp(mid, target)
+        base = match cmp(get(list, mid), target)
             case GreaterThan base
             case Equal mid
             case LessThan mid
         size = size - half
     }
 
-    match cmp(base, target)
+    match cmp(get(list, base), target)
         case Equal new Found[index = base]
         case GreaterThan new InsertAt[index = base]
         case LessThan new InsertAt[index = base + 1]
