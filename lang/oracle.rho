@@ -1,4 +1,7 @@
+!input typing
 @package lang.oracle
+@import lang.typing[True]
+@import lang[trace]
 
 let yield_fut = future
 
@@ -13,9 +16,15 @@ spawn func() {
     loop {
         intrinsic oracle_advance_future oracle_advance ()
         wait oracle_advance
-        # TODO count the yielded tasks and only break when no more task yielded
-        notify yield_fut
-        num_yielded = 0
+
+        match num_yielded != 0 case True {
+            notify yield_fut
+            yield_fut = future
+            num_yielded = 0
+            continue
+        }
+
+        trace("[oracle] exit")
         break
     }
 }

@@ -68,15 +68,16 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
         source_string.push('\n'); // assumed by Source::from_str
         let source = source_string.parse::<Source>()?;
         for input in source.inputs {
-            let input = path
-                .parent()
-                .expect("source file has parent")
-                .join(input)
-                .canonicalize()?;
+            let input = path.parent().expect("source file has parent").join(input);
             if input.is_file() {
-                walk(input, compile, asset, visited)?
+                walk(input.canonicalize()?, compile, asset, visited)?
             } else if input.extension().is_none() && input.with_extension("rho").is_file() {
-                walk(input.with_extension("rho"), compile, asset, visited)?
+                walk(
+                    input.with_extension("rho").canonicalize()?,
+                    compile,
+                    asset,
+                    visited,
+                )?
             } else if input.is_dir() {
                 for entry in WalkDir::new(input) {
                     let entry = entry?;
