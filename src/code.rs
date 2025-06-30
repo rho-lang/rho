@@ -32,7 +32,6 @@ pub enum Expr {
     Literal(Literal),
     Import(String, String),
     Var(String),
-    Future, // the synchronization object
 
     Compound(Vec<Stmt>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
@@ -43,8 +42,10 @@ pub enum Expr {
 #[derive(Debug)]
 pub enum Literal {
     Unit,
-    String(String),
     Func(Func),
+    Future, // the synchronization object
+    String(String),
+    I32(i32),
 }
 
 pub mod syntax {
@@ -82,6 +83,7 @@ pub type ValueIndex = usize;
 pub enum Instr {
     MakeUnit(ValueIndex),
     MakeString(ValueIndex, String),
+    MakeI32(ValueIndex, i32),
 
     MakeClosure(ValueIndex, BlockId), // dst, block, captured
     // promote the value into a cell for capturing. promote is a separated operation

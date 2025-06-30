@@ -11,7 +11,7 @@ mod worker;
 
 use std::{
     collections::HashSet,
-    env::args,
+    env::{self, args},
     error::Error,
     fs::read_to_string,
     path::{Path, PathBuf},
@@ -40,8 +40,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let prog = compile_sources(Path::new(&source), &mut asset)?;
 
-    for block_id in 0..=prog.block_id {
-        println!("{}", asset.display_block(block_id))
+    if let Ok(value) = env::var("RHO_DUMP_BLOCKS")
+        && value != "0"
+    {
+        for block_id in 0..=prog.block_id {
+            println!("{}", asset.display_block(block_id))
+        }
+        return Ok(());
     }
 
     worker::run(prog, registry, asset.into());

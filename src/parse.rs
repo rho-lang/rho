@@ -108,7 +108,7 @@ fn parse_atomic_expr(s: &mut &str) -> Result<Expr, ParseError> {
         ),
         ("\"", parse_string_literal),
         ("func", parse_func),
-        ("future", |_| Ok(Expr::Future)),
+        ("future", |_| Ok(Expr::Literal(Literal::Future))),
         ("if", parse_match),
         // just write `{}`
         // ("unit", |_| Ok(Expr::Literal(Literal::Unit))),

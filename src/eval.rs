@@ -384,6 +384,9 @@ impl Eval {
                     Instr::MakeString(dst, literal) => {
                         frame.values[*dst] = Value::alloc_string(literal, &mut context.space)?
                     }
+                    Instr::MakeI32(dst, value) => {
+                        frame.values[*dst] = Value::new_i32(*value);
+                    }
 
                     Instr::Op2(dst, op, a, b) => {
                         let dst_value = match op {
