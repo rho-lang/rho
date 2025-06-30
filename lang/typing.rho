@@ -1,0 +1,7 @@
+@package lang.typing
+
+# remember to update every time TypeId constants are changed
+intrinsic type_object True (8)
+@export True
+intrinsic type_object False (9)
+@export False

@@ -621,6 +621,7 @@ pub mod intrinsics {
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
         eval::{ExecuteError, Future, Value},
+        typing::TypeId,
         worker::WorkerContext,
     };
 
@@ -628,6 +629,7 @@ pub mod intrinsics {
         asset.intrinsics = [
             ("trace", trace as Intrinsic),
             ("oracle_advance_future", oracle_advance_future),
+            ("type_object", type_object),
         ]
         .map(|(s, f)| (s.into(), f))
         .into()
@@ -645,7 +647,7 @@ pub mod intrinsics {
     //     }
     // }
 
-    pub fn trace(
+    fn trace(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
@@ -655,13 +657,23 @@ pub mod intrinsics {
         Ok(())
     }
 
-    pub fn oracle_advance_future(
+    fn oracle_advance_future(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
         values[indexes[0]] =
             Value::alloc_future(Future(context.oracle_advance), &mut context.space)?;
+        Ok(())
+    }
+
+    fn type_object(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        _: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let id = values[indexes[1]].load_i32()?;
+        values[indexes[0]] = Value::new_type_id(TypeId(id as _));
         Ok(())
     }
 }

@@ -389,12 +389,16 @@ impl Compile {
                     self.current_block.expr_index = expr_index + i;
                     self.input_expr(arg, asset)?;
                 }
-                match (&*op, num_arg) {
-                    ("+", 2) => {
-                        self.add(Instr::Op2(expr_index, Op2::Add, expr_index, expr_index + 1))
-                    }
-                    ("-", 2) => {
-                        self.add(Instr::Op2(expr_index, Op2::Sub, expr_index, expr_index + 1))
+                match num_arg {
+                    2 => {
+                        let op = match &*op {
+                            "+" => Op2::Add,
+                            "-" => Op2::Sub,
+                            "==" => Op2::Eq,
+                            "!=" => Op2::Ne,
+                            _ => unimplemented!(),
+                        };
+                        self.add(Instr::Op2(expr_index, op, expr_index, expr_index + 1))
                     }
                     _ => unimplemented!(),
                 }
