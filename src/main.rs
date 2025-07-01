@@ -58,11 +58,16 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
         path: PathBuf,
         compile: &mut Compile,
         asset: &mut Asset,
+        compiled: &mut HashSet<PathBuf>,
         visited: &mut HashSet<PathBuf>,
     ) -> Result<(), Box<dyn Error>> {
-        if !visited.insert(path.clone()) {
+        if compiled.contains(&path) {
             return Ok(());
         }
+        if !visited.insert(path.clone()) {
+            return Err(format!("circular dependency detected: {}", path.display()).into());
+        }
+
         tracing::debug!(path = %path.display(), "compile");
         let mut source_string = read_to_string(&path)?;
         source_string.push('\n'); // assumed by Source::from_str
@@ -70,12 +75,13 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
         for input in source.inputs {
             let input = path.parent().expect("source file has parent").join(input);
             if input.is_file() {
-                walk(input.canonicalize()?, compile, asset, visited)?
+                walk(input.canonicalize()?, compile, asset, compiled, visited)?
             } else if input.extension().is_none() && input.with_extension("rho").is_file() {
                 walk(
                     input.with_extension("rho").canonicalize()?,
                     compile,
                     asset,
+                    compiled,
                     visited,
                 )?
             } else if input.is_dir() {
@@ -83,14 +89,16 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
                     let entry = entry?;
                     let path = entry.path().canonicalize()?;
                     if path.is_file() && path.extension() == Some("rho".as_ref()) {
-                        walk(path, compile, asset, visited)?
+                        walk(path, compile, asset, compiled, visited)?
                     }
                 }
             } else {
                 return Err(format!("invalid input {}", input.display()).into());
             }
         }
+
         compile.input(source.stmts, asset)?;
+        compiled.insert(path.clone());
         Ok(())
     }
 
@@ -99,6 +107,7 @@ fn compile_sources(path: impl AsRef<Path>, asset: &mut Asset) -> Result<Closure,
         path.as_ref().canonicalize()?,
         &mut compile,
         asset,
+        &mut Default::default(),
         &mut Default::default(),
     )?;
     Ok(compile.finish(asset))

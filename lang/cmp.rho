@@ -1,3 +1,4 @@
+!input typing
 @package lang.cmp
 @import lang.typing[True, False]
 

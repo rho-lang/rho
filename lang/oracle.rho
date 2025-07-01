@@ -1,7 +1,8 @@
+!input package
 !input typing
 @package lang.oracle
-@import lang.typing[True]
 @import lang[trace]
+@import lang.typing[True]
 
 let yield_fut = future
 let num_yielded = 0
