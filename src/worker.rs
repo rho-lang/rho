@@ -41,7 +41,7 @@ pub fn run(main_closure: Closure, registry: TypeRegistry, asset: Arc<Asset>) {
             SchedStatus::Ready(task_id) => task_id,
             SchedStatus::Halted if !scheduling_oracle => {
                 tracing::trace!("schedule oracle advance");
-                context.sched.notify(context.oracle_advance);
+                context.sched.notify_clear(context.oracle_advance);
                 context.oracle_advance = context.sched.alloc_notify_token();
                 scheduling_oracle = true;
                 continue;
@@ -57,7 +57,7 @@ pub fn run(main_closure: Closure, registry: TypeRegistry, asset: Arc<Asset>) {
         while replace(&mut task_ready, false) {
             let task = tasks.get_mut(&task_id).expect("task {task_id} exists");
             match task.run(&mut context, &asset) {
-                Ok(RunStatus::Waiting(notify_token)) => context.sched.block(task_id, notify_token),
+                Ok(RunStatus::Waiting(notify_token)) => context.sched.wait(task_id, notify_token),
                 Ok(RunStatus::Exited) => {
                     tasks.remove(&task_id);
                 }

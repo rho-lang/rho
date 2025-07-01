@@ -4,11 +4,11 @@
 @import lang[trace]
 @import lang.typing[True]
 
-let yield_fut = future
+let yield_ev = event
 let num_yielded = 0
 let yield = func() {
     num_yielded = num_yielded + 1
-    wait yield_fut
+    wait yield_ev
 }
 @export yield
 
@@ -20,12 +20,12 @@ let sleep = func(duration) {
 
 spawn func() {
     loop {
-        intrinsic oracle_advance_future[oracle_advance]
+        intrinsic oracle_advance_event[oracle_advance]
         wait oracle_advance
 
         match num_yielded != 0 case True {
-            notify yield_fut
-            yield_fut = future
+            notify yield_ev
+            yield_ev = event
             num_yielded = 0
             continue
         }

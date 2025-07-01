@@ -147,7 +147,7 @@ fn parse_expr4(s: &mut &str) -> Result<Expr, ParseError> {
         ),
         ("\"", parse_string_literal),
         ("func", parse_func),
-        ("future", |_| Ok(Expr::Literal(Literal::Future))),
+        ("event", |_| Ok(Expr::Literal(Literal::Event))),
         ("match", parse_match),
         ("new", parse_new),
         ("type", parse_type),

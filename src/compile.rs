@@ -459,7 +459,7 @@ impl Compile {
             Expr::Literal(Literal::String(string)) => {
                 self.add(Instr::MakeString(expr_index, string))
             }
-            Expr::Literal(Literal::Future) => self.add(Instr::MakeFuture(expr_index)),
+            Expr::Literal(Literal::Event) => self.add(Instr::MakeEvent(expr_index)),
             Expr::Literal(Literal::I32(value)) => self.add(Instr::MakeI32(expr_index, value)),
         }
         Ok(())

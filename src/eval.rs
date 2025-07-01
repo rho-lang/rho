@@ -12,6 +12,29 @@ use crate::{
     worker::WorkerContext,
 };
 
+#[derive(Debug, Default)]
+pub struct Eval {
+    frames: Vec<Frame>,
+}
+
+#[derive(Debug)]
+struct Frame {
+    closure: Closure,
+    instr_pointer: InstrIndex,
+    call_dst: Option<usize>,
+    values: Vec<Value>,
+}
+
+impl Eval {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn init(&mut self, closure: Closure, asset: &Asset) -> Result<(), ArityError> {
+        self.push_frame(closure, &[], asset)
+    }
+}
+
 // optimization plan: pack Value into a u64 word. 24 bits for `type_id` and 40
 // bits for `data`. assuming Space alignment >= 8 (or else a 4 byte data can be
 // stored inline), 40 bits address space = 2^(40+3) byte or 8 TB heap space
@@ -62,39 +85,6 @@ impl Closure {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Future(NotifyToken);
-
-struct Unit;
-
-struct String {
-    buf: SpaceAddr,
-    len: usize,
-}
-
-#[derive(Debug, Default)]
-pub struct Eval {
-    frames: Vec<Frame>,
-}
-
-#[derive(Debug)]
-struct Frame {
-    closure: Closure,
-    instr_pointer: InstrIndex,
-    call_dst: Option<usize>,
-    values: Vec<Value>,
-}
-
-impl Eval {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn init(&mut self, closure: Closure, asset: &Asset) -> Result<(), ArityError> {
-        self.push_frame(closure, &[], asset)
-    }
-}
-
 #[derive(Error, Debug)]
 #[error("arity error: accept {expected} arguments, but got {actual}")]
 pub struct ArityError {
@@ -130,6 +120,16 @@ impl Eval {
         Ok(())
     }
 }
+
+struct Unit;
+
+struct String {
+    buf: SpaceAddr,
+    len: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Event(NotifyToken);
 
 pub enum ExecuteStatus {
     Waiting(NotifyToken),
@@ -227,22 +227,22 @@ impl Eval {
                         continue 'control;
                     }
 
-                    Instr::MakeFuture(dst) => {
+                    Instr::MakeEvent(dst) => {
                         // leaking a NotifyToken should be fine
-                        let future = Future(context.sched.alloc_notify_token());
-                        frame.values[*dst] = Value::alloc_future(future, &mut context.space)?
+                        let event = Event(context.sched.alloc_notify_token());
+                        frame.values[*dst] = Value::alloc_event(event, &mut context.space)?
                     }
-                    Instr::Wait(future) => {
-                        let Future(notify_token) =
-                            frame.values[*future].load_future(&context.space)?;
+                    Instr::Wait(event) => {
+                        let Event(notify_token) =
+                            frame.values[*event].load_event(&context.space)?;
                         // on the next `execute`, start from the next instruction
                         frame.instr_pointer += 1;
                         break 'control Ok(ExecuteStatus::Waiting(notify_token));
                     }
-                    Instr::Notify(future) => {
-                        let Future(notify_token) =
-                            frame.values[*future].load_future(&context.space)?;
-                        context.sched.notify(notify_token)
+                    Instr::Notify(event) => {
+                        let Event(notify_token) =
+                            frame.values[*event].load_event(&context.space)?;
+                        context.sched.notify_clear(notify_token)
                     }
 
                     Instr::Intrinsic(intrinsic, indexes) => {
@@ -469,7 +469,7 @@ impl Value {
     // `store_x` are provided, then `alloc_x` is equivalent to wrapping the result
     // of `space.typed_alloc::<X>()` in a X-typed Value and then `store_x`, but
     // `alloc_x` is more convenient and saves one unnecessary type check
-    // for read-only types (e.g., Future), only `load_x` and/or `get_x` may be
+    // for read-only types (e.g., Event), only `load_x` and/or `get_x` may be
     // provided. for heap-allocated mutable types, which of the four access methods
     // are provided is based on an on-demand manner and depends on the access
     // pattern. For example, Closure provides `get_closure_mut` for implementing
@@ -520,18 +520,18 @@ impl Value {
     }
     // access to cell is performed directly with SpaceAddr, not going through Value
 
-    // Future
-    fn alloc_future(future: Future, space: &mut Space) -> Result<Self, OutOfSpace> {
-        let addr = space.typed_alloc::<Future>()?;
-        unsafe { space.typed_write(addr, future) };
+    // Event
+    fn alloc_event(event: Event, space: &mut Space) -> Result<Self, OutOfSpace> {
+        let addr = space.typed_alloc::<Event>()?;
+        unsafe { space.typed_write(addr, event) };
         Ok(Self {
-            type_id: TypeId::FUTURE,
+            type_id: TypeId::EVENT,
             data: addr as _,
         })
     }
 
-    fn load_future(&self, space: &Space) -> Result<Future, TypeError> {
-        self.ensure_type(TypeId::FUTURE)?;
+    fn load_event(&self, space: &Space) -> Result<Event, TypeError> {
+        self.ensure_type(TypeId::EVENT)?;
         Ok(*unsafe { space.typed_get(self.data as _) })
     }
 
@@ -639,7 +639,7 @@ pub mod intrinsics {
     use crate::{
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
-        eval::{ExecuteError, Future, TypeError, Value, value_slice_load, value_slice_store},
+        eval::{Event, ExecuteError, TypeError, Value, value_slice_load, value_slice_store},
         space::SpaceAddr,
         typing::TypeId,
         worker::WorkerContext,
@@ -649,7 +649,7 @@ pub mod intrinsics {
         START.with(|_| {}); // initialize the thread-local variable
         asset.intrinsics = [
             ("trace", trace as Intrinsic),
-            ("oracle_advance_future", oracle_advance_future),
+            ("oracle_advance_event", oracle_advance_event),
             ("type_object", type_object),
             ("time_since_start", time_since_start),
             ("slice_new", slice_new),
@@ -685,13 +685,12 @@ pub mod intrinsics {
         Ok(())
     }
 
-    fn oracle_advance_future(
+    fn oracle_advance_event(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        values[indexes[0]] =
-            Value::alloc_future(Future(context.oracle_advance), &mut context.space)?;
+        values[indexes[0]] = Value::alloc_event(Event(context.oracle_advance), &mut context.space)?;
         Ok(())
     }
 

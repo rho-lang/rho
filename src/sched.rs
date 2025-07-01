@@ -74,11 +74,11 @@ impl Sched {
         self.next_notify_token
     }
 
-    pub fn block(&mut self, task_id: TaskId, token: NotifyToken) {
+    pub fn wait(&mut self, task_id: TaskId, token: NotifyToken) {
         self.notify_tasks.entry(token).or_default().push(task_id)
     }
 
-    pub fn notify(&mut self, token: NotifyToken) {
+    pub fn notify_clear(&mut self, token: NotifyToken) {
         if let Some(task_ids) = self.notify_tasks.remove(&token) {
             for task_id in task_ids {
                 self.ready_queue.push_back(task_id)
