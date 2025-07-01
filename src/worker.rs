@@ -42,7 +42,6 @@ pub fn run(main_closure: Closure, registry: TypeRegistry, asset: Arc<Asset>) {
             SchedStatus::Halted if !scheduling_oracle => {
                 tracing::trace!("schedule oracle advance");
                 context.sched.notify_clear(context.oracle_advance);
-                context.oracle_advance = context.sched.alloc_notify_token();
                 scheduling_oracle = true;
                 continue;
             }

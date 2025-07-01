@@ -22,10 +22,10 @@ spawn func() {
     loop {
         intrinsic oracle_advance_event[oracle_advance]
         wait oracle_advance
+        trace("[oracle] waked up")
 
         match num_yielded != 0 case True {
             notify yield_ev
-            yield_ev = event
             num_yielded = 0
             continue
         }
