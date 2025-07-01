@@ -129,7 +129,7 @@ struct String {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Event(NotifyToken);
+struct Signal(NotifyToken);
 
 pub enum ExecuteStatus {
     Waiting(NotifyToken),
@@ -227,21 +227,21 @@ impl Eval {
                         continue 'control;
                     }
 
-                    Instr::MakeEvent(dst) => {
+                    Instr::MakeSignal(dst) => {
                         // leaking a NotifyToken should be fine
-                        let event = Event(context.sched.alloc_notify_token());
-                        frame.values[*dst] = Value::alloc_event(event, &mut context.space)?
+                        let signal = Signal(context.sched.alloc_notify_token());
+                        frame.values[*dst] = Value::alloc_signal(signal, &mut context.space)?
                     }
-                    Instr::Wait(event) => {
-                        let Event(notify_token) =
-                            frame.values[*event].load_event(&context.space)?;
+                    Instr::Wait(signal) => {
+                        let Signal(notify_token) =
+                            frame.values[*signal].load_signal(&context.space)?;
                         // on the next `execute`, start from the next instruction
                         frame.instr_pointer += 1;
                         break 'control Ok(ExecuteStatus::Waiting(notify_token));
                     }
-                    Instr::Notify(event) => {
-                        let Event(notify_token) =
-                            frame.values[*event].load_event(&context.space)?;
+                    Instr::Notify(signal) => {
+                        let Signal(notify_token) =
+                            frame.values[*signal].load_signal(&context.space)?;
                         context.sched.notify_clear(notify_token)
                     }
 
@@ -469,7 +469,7 @@ impl Value {
     // `store_x` are provided, then `alloc_x` is equivalent to wrapping the result
     // of `space.typed_alloc::<X>()` in a X-typed Value and then `store_x`, but
     // `alloc_x` is more convenient and saves one unnecessary type check
-    // for read-only types (e.g., Event), only `load_x` and/or `get_x` may be
+    // for read-only types (e.g., Signal), only `load_x` and/or `get_x` may be
     // provided. for heap-allocated mutable types, which of the four access methods
     // are provided is based on an on-demand manner and depends on the access
     // pattern. For example, Closure provides `get_closure_mut` for implementing
@@ -520,18 +520,18 @@ impl Value {
     }
     // access to cell is performed directly with SpaceAddr, not going through Value
 
-    // Event
-    fn alloc_event(event: Event, space: &mut Space) -> Result<Self, OutOfSpace> {
-        let addr = space.typed_alloc::<Event>()?;
-        unsafe { space.typed_write(addr, event) };
+    // Signal
+    fn alloc_signal(signal: Signal, space: &mut Space) -> Result<Self, OutOfSpace> {
+        let addr = space.typed_alloc::<Signal>()?;
+        unsafe { space.typed_write(addr, signal) };
         Ok(Self {
-            type_id: TypeId::EVENT,
+            type_id: TypeId::SIGNAL,
             data: addr as _,
         })
     }
 
-    fn load_event(&self, space: &Space) -> Result<Event, TypeError> {
-        self.ensure_type(TypeId::EVENT)?;
+    fn load_signal(&self, space: &Space) -> Result<Signal, TypeError> {
+        self.ensure_type(TypeId::SIGNAL)?;
         Ok(*unsafe { space.typed_get(self.data as _) })
     }
 
@@ -639,7 +639,7 @@ pub mod intrinsics {
     use crate::{
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
-        eval::{Event, ExecuteError, TypeError, Value, value_slice_load, value_slice_store},
+        eval::{ExecuteError, Signal, TypeError, Value, value_slice_load, value_slice_store},
         space::SpaceAddr,
         typing::TypeId,
         worker::WorkerContext,
@@ -649,7 +649,7 @@ pub mod intrinsics {
         START.with(|_| {}); // initialize the thread-local variable
         asset.intrinsics = [
             ("trace", trace as Intrinsic),
-            ("oracle_advance_event", oracle_advance_event),
+            ("oracle_advance_signal", oracle_advance_signal),
             ("type_object", type_object),
             ("time_since_start", time_since_start),
             ("slice_new", slice_new),
@@ -685,12 +685,13 @@ pub mod intrinsics {
         Ok(())
     }
 
-    fn oracle_advance_event(
+    fn oracle_advance_signal(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        values[indexes[0]] = Value::alloc_event(Event(context.oracle_advance), &mut context.space)?;
+        values[indexes[0]] =
+            Value::alloc_signal(Signal(context.oracle_advance), &mut context.space)?;
         Ok(())
     }
 

@@ -4,11 +4,11 @@
 @import lang[trace]
 @import lang.typing[True]
 
-let yield_ev = event
+let yield_sig = signal
 let num_yielded = 0
 let yield = func() {
     num_yielded = num_yielded + 1
-    wait yield_ev
+    wait yield_sig
 }
 @export yield
 
@@ -20,12 +20,12 @@ let sleep = func(duration) {
 
 spawn func() {
     loop {
-        intrinsic oracle_advance_event[oracle_advance]
+        intrinsic oracle_advance_signal[oracle_advance]
         wait oracle_advance
         trace("[oracle] waked up")
 
         match num_yielded != 0 case True {
-            notify yield_ev
+            notify yield_sig
             num_yielded = 0
             continue
         }

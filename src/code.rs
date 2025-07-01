@@ -14,8 +14,8 @@ pub enum Stmt {
     Return(Expr),
 
     // concurrency primitives
-    Wait(Expr),   // wait on an Event to notify
-    Notify(Expr), // notify all tasks `Wait`ing on an Event
+    Wait(Expr),   // wait on a Signal to notify
+    Notify(Expr), // notify all tasks `Wait`ing on a Signal
     Spawn(Expr),
 
     Bind(String, Expr),
@@ -47,7 +47,7 @@ pub enum Expr {
 #[derive(Debug)]
 pub enum Literal {
     Unit,
-    Event, // the synchronization object
+    Signal, // the synchronization object
     String(String),
     I32(i32),
 }
@@ -102,7 +102,7 @@ pub enum Instr {
     MakeRecordType(ValueIndex, RecordLayout),
     MakeRecord(ValueIndex, ValueIndex, Vec<(StringId, ValueIndex)>), // dst, type_id, attrs
 
-    MakeEvent(ValueIndex),
+    MakeSignal(ValueIndex),
 
     Copy(ValueIndex, ValueIndex),
     Op2(ValueIndex, Op2, ValueIndex, ValueIndex),

@@ -2,17 +2,17 @@
 @import lang[trace]
 @import lang.oracle[yield]
 
-let ev = event
+let sig = signal
 spawn func() {
     trace("[task#1] start")
     yield()
     trace("[task#1] yielded")
-    notify ev
+    notify sig
     trace("[task#1] notified")
 }
 spawn func() {
     trace("[task#2] finish")
 }
 trace("[main] spawned")
-wait ev
+wait sig
 trace("[main] wait finished")

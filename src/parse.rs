@@ -147,7 +147,7 @@ fn parse_expr4(s: &mut &str) -> Result<Expr, ParseError> {
         ),
         ("\"", parse_string_literal),
         ("func", parse_func),
-        ("event", |_| Ok(Expr::Literal(Literal::Event))),
+        ("signal", |_| Ok(Expr::Literal(Literal::Signal))),
         ("match", parse_match),
         ("new", parse_new),
         ("type", parse_type),
@@ -393,11 +393,7 @@ fn parse_mut(s: &mut &str, record: Expr) -> Result<Vec<Stmt>, ParseError> {
     *s = consume(trim(s), '.', "dot in record mutation")?;
     let attr = extract_identifier(s)?;
     *s = consume(trim(s), '=', "\"=\" in record mutation")?;
-    Ok(vec![Stmt::MutAttr(
-        record.into(),
-        attr.into(),
-        parse_expr(s)?,
-    )])
+    Ok(vec![Stmt::MutAttr(record, attr.into(), parse_expr(s)?)])
 }
 
 fn parse_infix(

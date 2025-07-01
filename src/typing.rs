@@ -35,7 +35,7 @@ impl TypeId {
     // basically just Value, but dedicated for closure capturing
     // following Python's terminology
     pub const CELL: Self = Self(3);
-    pub const EVENT: Self = Self(4);
+    pub const SIGNAL: Self = Self(4);
     pub const SLICE: Self = Self(10); // from this point i decide to not renumber the types
 
     // core record types
