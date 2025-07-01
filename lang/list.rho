@@ -21,7 +21,7 @@ let push = func(list, item) {
             case True 1
             case False list.len * 2
         intrinsic slice_new[slice](cap)
-        intrinsic slice_copy(list.slice, slice, list.len)
+        intrinsic slice_copy_nonoverlapping(list.slice, slice, list.len)
         list mut.slice = slice
         list mut.cap = cap
     }
@@ -49,6 +49,7 @@ let set = func(list, index, item) {
 
 let Found = type[index]
 let InsertAt = type[index]
+# https://doc.rust-lang.org/1.88.0/src/core/slice/mod.rs.html#2880-2882
 let binary_search = func(list, target, cmp) {
     @import lang.cmp[GreaterThan, Equal, LessThan]
 
@@ -78,3 +79,19 @@ let binary_search = func(list, target, cmp) {
 @export Found
 @export InsertAt
 @export binary_search
+
+# https://doc.rust-lang.org/1.88.0/src/alloc/vec/mod.rs.html#2002
+let insert = func(list, index, item) {
+    match index > list.len case True {
+        return {}  # TODO throw exception
+    }
+    push(list, {})  # grow_one
+
+    intrinsic slice_offset[p](list.slice, index)
+    match index < list.len case True {
+        intrinsic slice_copy(p, p + 1, list.len - index)
+    }
+    intrinsic slice_store(p, 0, item)
+    list mut.len = list.len + 1
+}
+@export insert

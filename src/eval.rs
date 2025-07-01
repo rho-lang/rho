@@ -632,7 +632,7 @@ impl Value {
 }
 
 pub mod intrinsics {
-    use std::ptr::copy;
+    use std::ptr::{copy, copy_nonoverlapping};
 
     use thiserror::Error;
 
@@ -656,6 +656,8 @@ pub mod intrinsics {
             ("slice_load", slice_load),
             ("slice_store", slice_store),
             ("slice_copy", slice_copy),
+            ("slice_copy_nonoverlapping", slice_copy_nonoverlapping),
+            ("slice_offset", slice_offset),
         ]
         .map(|(s, f)| (s.into(), f))
         .into()
@@ -773,6 +775,17 @@ pub mod intrinsics {
         Ok(())
     }
 
+    fn slice_offset(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        _: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let Slice(buf) = values[indexes[1]].load_slice()?;
+        let offset = values[indexes[2]].load_int32()?;
+        values[indexes[0]] = Value::new_slice(Slice(buf + offset as usize * size_of::<Value>()));
+        Ok(())
+    }
+
     // while this can be achieved by per-value load + store, expect a performance
     // gap to necessitate
     fn slice_copy(
@@ -785,6 +798,24 @@ pub mod intrinsics {
         let len = values[indexes[2]].load_int32()?;
         unsafe {
             copy(
+                context.space.typed_get::<Value>(src),
+                context.space.typed_get_mut(dst),
+                len as _,
+            );
+        }
+        Ok(())
+    }
+
+    fn slice_copy_nonoverlapping(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        context: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let Slice(src) = values[indexes[0]].load_slice()?;
+        let Slice(dst) = values[indexes[1]].load_slice()?;
+        let len = values[indexes[2]].load_int32()?;
+        unsafe {
+            copy_nonoverlapping(
                 context.space.typed_get::<Value>(src),
                 context.space.typed_get_mut(dst),
                 len as _,
