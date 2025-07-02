@@ -47,12 +47,39 @@ pub struct Value {
     data: u64, // embedded data for inline types, SpaceAddr pointing to actual data for others
 }
 
+// helpers to maintain compatibility after the optimization is applied
+impl Value {
+    fn new(type_id: TypeId, addr: SpaceAddr) -> Self {
+        Self {
+            type_id,
+            data: addr as _,
+        }
+    }
+
+    fn new_inline(type_id: TypeId, data: u64) -> Self {
+        Self { type_id, data }
+    }
+
+    fn new_atom(type_id: TypeId) -> Self {
+        Self::new_inline(type_id, u64::MAX)
+    }
+
+    fn type_id(&self) -> TypeId {
+        self.type_id
+    }
+
+    fn data(&self) -> u64 {
+        self.data
+    }
+
+    fn addr(&self) -> SpaceAddr {
+        self.data as _
+    }
+}
+
 impl Default for Value {
     fn default() -> Self {
-        Self {
-            type_id: TypeId::VACANT,
-            data: u64::MAX,
-        }
+        Self::new_atom(TypeId::VACANT)
     }
 }
 
@@ -180,7 +207,7 @@ impl Eval {
                             None => true,
                             Some(cond) => {
                                 let target = frame.values[cond.pattern].load_type_id()?;
-                                frame.values[cond.scrutinee].type_id == target
+                                frame.values[cond.scrutinee].type_id() == target
                             }
                         } {
                             frame.instr_pointer = *instr_index;
@@ -267,7 +294,7 @@ impl Eval {
                             CaptureSource::Original(index) => {
                                 let captured_value = frame.values[*index];
                                 captured_value.ensure_type(TypeId::CELL).unwrap();
-                                captured_value.data as _
+                                captured_value.addr()
                             }
                             CaptureSource::Transitive(index) => frame.closure.captured[*index],
                         };
@@ -298,7 +325,7 @@ impl Eval {
                         let value = frame.values[*index];
                         value.ensure_type(TypeId::CELL).unwrap();
                         frame.values[*index] =
-                            unsafe { value_slice_load(&context.space, value.data as _, 0) }
+                            unsafe { value_slice_load(&context.space, value.addr(), 0) }
                     }
                     Instr::SetPromoted(dst, src) => {
                         let dst_value = frame.values[*dst];
@@ -306,7 +333,7 @@ impl Eval {
                         unsafe {
                             value_slice_store(
                                 &mut context.space,
-                                dst_value.data as _,
+                                dst_value.addr(),
                                 0,
                                 frame.values[*src],
                             )
@@ -344,7 +371,7 @@ impl Eval {
                     Instr::GetAttr(dst, record, attr) => {
                         let record_value = &frame.values[*record];
                         let Some(RecordLayout(layout)) =
-                            context.registry.get_record_layout(record_value.type_id)
+                            context.registry.get_record_layout(record_value.type_id())
                         else {
                             return Err(ExecuteError::NotRecord);
                         };
@@ -355,12 +382,12 @@ impl Eval {
                             ));
                         };
                         frame.values[*dst] =
-                            unsafe { value_slice_load(&context.space, record_value.data as _, pos) }
+                            unsafe { value_slice_load(&context.space, record_value.addr(), pos) }
                     }
                     Instr::SetAttr(record, attr, index) => {
                         let record_value = &frame.values[*record];
                         let Some(RecordLayout(layout)) =
-                            context.registry.get_record_layout(record_value.type_id)
+                            context.registry.get_record_layout(record_value.type_id())
                         else {
                             return Err(ExecuteError::NotRecord);
                         };
@@ -373,7 +400,7 @@ impl Eval {
                         unsafe {
                             value_slice_store(
                                 &mut context.space,
-                                record_value.data as _,
+                                record_value.addr(),
                                 pos,
                                 frame.values[*index],
                             )
@@ -447,10 +474,10 @@ pub struct TypeError {
 
 impl Value {
     fn ensure_type(&self, expected: TypeId) -> Result<(), TypeError> {
-        if self.type_id != expected {
+        if self.type_id() != expected {
             return Err(TypeError {
                 expected,
-                actual: self.type_id,
+                actual: self.type_id(),
             });
         }
         Ok(())
@@ -477,46 +504,37 @@ impl Value {
     // `get_string` and `get_string_mut` for implementing intrinsics, etc.
 
     // TypeId
-    fn new_type_id(type_id: TypeId) -> Self {
-        Self {
-            type_id: TypeId::TYPE_ID,
-            data: type_id.0 as _,
-        }
+    fn new_type_id(TypeId(id): TypeId) -> Self {
+        Self::new_inline(TypeId::TYPE_ID, id as _)
     }
 
     fn load_type_id(&self) -> Result<TypeId, TypeError> {
         self.ensure_type(TypeId::TYPE_ID)?;
-        Ok(TypeId(self.data as _))
+        Ok(TypeId(self.data() as _))
     }
 
     // Closure
     fn alloc_closure(closure: Closure, space: &mut Space) -> Result<Self, OutOfSpace> {
         let addr = space.typed_alloc::<Closure>()?;
         unsafe { space.typed_write(addr, closure) }
-        Ok(Self {
-            type_id: TypeId::CLOSURE,
-            data: addr as _,
-        })
+        Ok(Self::new(TypeId::CLOSURE, addr))
     }
 
     fn load_closure(&self, space: &Space) -> Result<Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(*unsafe { space.typed_get(self.data as _) })
+        Ok(*unsafe { space.typed_get(self.addr()) })
     }
 
     fn get_closure_mut<'a>(&self, space: &'a mut Space) -> Result<&'a mut Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(unsafe { space.typed_get_mut(self.data as _) })
+        Ok(unsafe { space.typed_get_mut(self.addr()) })
     }
 
     // cell type
     fn alloc_cell(value: Value, space: &mut Space) -> Result<Self, OutOfSpace> {
         let addr = space.typed_alloc::<Value>()?;
         unsafe { space.typed_write(addr, value) }
-        Ok(Self {
-            type_id: TypeId::CELL,
-            data: addr as _,
-        })
+        Ok(Self::new(TypeId::CELL, addr))
     }
     // access to cell is performed directly with SpaceAddr, not going through Value
 
@@ -524,23 +542,17 @@ impl Value {
     fn alloc_signal(signal: Signal, space: &mut Space) -> Result<Self, OutOfSpace> {
         let addr = space.typed_alloc::<Signal>()?;
         unsafe { space.typed_write(addr, signal) };
-        Ok(Self {
-            type_id: TypeId::SIGNAL,
-            data: addr as _,
-        })
+        Ok(Self::new(TypeId::SIGNAL, addr))
     }
 
     fn load_signal(&self, space: &Space) -> Result<Signal, TypeError> {
         self.ensure_type(TypeId::SIGNAL)?;
-        Ok(*unsafe { space.typed_get(self.data as _) })
+        Ok(*unsafe { space.typed_get(self.addr()) })
     }
 
     // unit type
     fn new_unit() -> Self {
-        Self {
-            type_id: TypeId::UNIT,
-            data: u64::MAX,
-        }
+        Self::new_atom(TypeId::UNIT)
     }
 
     fn load_unit(&self) -> Result<Unit, TypeError> {
@@ -557,15 +569,12 @@ impl Value {
         space.get_mut(buf, len).copy_from_slice(literal.as_bytes());
         let addr = space.typed_alloc::<String>()?;
         unsafe { space.typed_write(addr, String { buf, len }) }
-        Ok(Self {
-            type_id: TypeId::STRING,
-            data: addr as _,
-        })
+        Ok(Self::new(TypeId::STRING, addr))
     }
 
     fn get_str<'a>(&self, space: &'a Space) -> Result<&'a str, TypeError> {
         self.ensure_type(TypeId::STRING)?;
-        let string = unsafe { space.typed_get::<String>(self.data as _) };
+        let string = unsafe { space.typed_get::<String>(self.addr()) };
         Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
@@ -573,32 +582,23 @@ impl Value {
     fn new_int32(value: i32) -> Self {
         let mut data = [0; size_of::<u64>()];
         data[..size_of::<i32>()].copy_from_slice(&value.to_ne_bytes());
-        Self {
-            type_id: TypeId::INT32,
-            data: u64::from_ne_bytes(data),
-        }
+        Self::new_inline(TypeId::INT32, u64::from_ne_bytes(data))
     }
 
     fn load_int32(&self) -> Result<i32, TypeError> {
         self.ensure_type(TypeId::INT32)?;
         let mut value = [0; size_of::<i32>()];
-        value.copy_from_slice(&self.data.to_ne_bytes()[..size_of::<i32>()]);
+        value.copy_from_slice(&self.data().to_ne_bytes()[..size_of::<i32>()]);
         Ok(i32::from_ne_bytes(value))
     }
 
     // boolean types
     pub fn new_true() -> Self {
-        Self {
-            type_id: TypeId::TRUE,
-            data: u64::MAX,
-        }
+        Self::new_atom(TypeId::TRUE)
     }
 
     pub fn new_false() -> Self {
-        Self {
-            type_id: TypeId::FALSE,
-            data: u64::MAX,
-        }
+        Self::new_atom(TypeId::FALSE)
     }
 
     pub fn new_bool(value: bool) -> Self {
@@ -624,10 +624,7 @@ impl Value {
         for (dst, src) in record_attrs.iter_mut().zip(attrs) {
             *dst = src
         }
-        Ok(Self {
-            type_id,
-            data: addr as _,
-        })
+        Ok(Self::new(type_id, addr))
     }
 }
 
@@ -687,18 +684,18 @@ pub mod intrinsics {
                 message.into()
             } else if let Ok(int32) = value.load_int32() {
                 int32.to_string()
-            } else if let Some(RecordLayout(attrs)) = registry.get_record_layout(value.type_id) {
+            } else if let Some(RecordLayout(attrs)) = registry.get_record_layout(value.type_id()) {
                 let attrs = attrs
                     .iter()
                     .enumerate()
                     .map(|(i, &attr)| {
-                        let attr_value = unsafe { value_slice_load(space, value.data as _, i) };
+                        let attr_value = unsafe { value_slice_load(space, value.addr(), i) };
                         // TODO get interned string
                         format!("{} = {}", attr, format_value(attr_value, space, registry))
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("record({:?})[{attrs}]", value.type_id)
+                format!("record({:?})[{attrs}]", value.type_id())
             } else {
                 "<unknown>".into() // TODO
             }
@@ -749,15 +746,12 @@ pub mod intrinsics {
     impl Value {
         // slice type
         fn new_slice(Slice(addr): Slice) -> Self {
-            Self {
-                type_id: TypeId::SLICE,
-                data: addr as _,
-            }
+            Self::new(TypeId::SLICE, addr)
         }
 
         fn load_slice(&self) -> Result<Slice, TypeError> {
             self.ensure_type(TypeId::SLICE)?;
-            Ok(Slice(self.data as _))
+            Ok(Slice(self.addr()))
         }
     }
 
