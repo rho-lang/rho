@@ -14,14 +14,6 @@ push(xs, 12)
 push(xs, 13)
 push(xs, 14)
 
-let s = binary_search(xs, 1, cmp_int32)
-match s case Found trace("Found")
-match s.index == 0 case True trace("at index 0")
-
-let s = binary_search(xs, 12, cmp_int32)
-match s case Found trace("Found")
-match s.index == 5 case True trace("at index 5")
-
-let s = binary_search(xs, 5, cmp_int32)
-match s case InsertAt trace("InsertAt")
-match s.index == 4 case True trace("at index 4")
+trace(binary_search(xs, 1, cmp_int32))
+trace(binary_search(xs, 12, cmp_int32))
+trace(binary_search(xs, 5, cmp_int32))

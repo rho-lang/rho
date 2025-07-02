@@ -640,8 +640,8 @@ pub mod intrinsics {
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
         eval::{ExecuteError, Signal, TypeError, Value, value_slice_load, value_slice_store},
-        space::SpaceAddr,
-        typing::TypeId,
+        space::{Space, SpaceAddr},
+        typing::{RecordLayout, TypeId, TypeRegistry},
         worker::WorkerContext,
     };
 
@@ -680,8 +680,31 @@ pub mod intrinsics {
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let message = values[indexes[0]].get_str(&context.space)?;
-        tracing::info!(message);
+        let value = values[indexes[0]];
+
+        fn format_value(value: Value, space: &Space, registry: &TypeRegistry) -> String {
+            if let Ok(message) = value.get_str(space) {
+                message.into()
+            } else if let Ok(int32) = value.load_int32() {
+                int32.to_string()
+            } else if let Some(RecordLayout(attrs)) = registry.get_record_layout(value.type_id) {
+                let attrs = attrs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &attr)| {
+                        let attr_value = unsafe { value_slice_load(space, value.data as _, i) };
+                        // TODO get interned string
+                        format!("{} = {}", attr, format_value(attr_value, space, registry))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("record({:?})[{attrs}]", value.type_id)
+            } else {
+                "<unknown>".into() // TODO
+            }
+        }
+
+        tracing::info!(value = format_value(value, &context.space, &context.registry));
         Ok(())
     }
 
