@@ -3,58 +3,71 @@
 @package lang.list
 @import lang.typing[True, False]
 
-let List = type[slice, len, cap]
+let List = type[native]
 
 let create = func() {
-    intrinsic slice_new[slice](0)
-    new List[slice = slice, len = 0, cap = 0]
+    intrinsic list_new[list](0)
+    new List[native = list]
 }
 @export create
 
 let len = func(list) {
-    list.len
+    intrinsic list_len[len](list.native)
+    len
 }
 @export len
 
+let set_len = func(list, len) {
+    intrinsic list_set_len(list.native, len)
+}
+
+let cap = func(list) {
+    intrinsic list_cap[cap](list.native)
+    cap   
+}
+
+let grow = func(list) {
+    let l = len(list)
+    let new_cap = match l == 0
+        case True 4  # following Rust practice
+        case False l * 2
+    intrinsic list_new[new_native](new_cap)
+    intrinsic list_copy(list.native, new_native)
+    list mut.native = new_native
+}
+
 let push = func(list, item) {
-    match list.len == list.cap case True {
-        let cap = match list.len == 0
-            case True 1
-            case False list.len * 2
-        intrinsic slice_new[slice](cap)
-        intrinsic slice_copy_nonoverlapping(list.slice, slice, list.len)
-        list mut.slice = slice
-        list mut.cap = cap
-    }
-    intrinsic slice_store(list.slice, list.len, item)
-    list mut.len = list.len + 1
+    let l = len(list)
+    match l == cap(list) case True grow(list)
+    intrinsic list_store(list.native, l, item)
+    set_len(list, l + 1)
 }
 @export push
 
 let get = func(list, index) {
-    match index >= list.len case True {
+    match index >= len(list) case True {
         return {}  # TODO throw exception
     }
-    intrinsic slice_load[item](list.slice, index)
+    intrinsic list_load[item](list.native, index)
     item
 }
 @export get
 
 let set = func(list, index, item) {
-    match index >= list.len case True {
+    match index >= len(list) case True {
         return {}  # TODO throw exception
     }
-    intrinsic slice_store(list.slice, index, item)
+    intrinsic list_store(list.native, index, item)
 }
 @export set
 
 let Found = type[index]
 let InsertAt = type[index]
 # https://doc.rust-lang.org/1.88.0/src/core/slice/mod.rs.html#2880-2882
-let binary_search = func(list, target, cmp) {
+let binary_search = func(get, len, target, cmp) {
     @import lang.cmp[GreaterThan, Equal, LessThan]
 
-    let size = list.len
+    let size = len
     match size == 0 case True {
         return new InsertAt[index = 0]
     }
@@ -65,14 +78,14 @@ let binary_search = func(list, target, cmp) {
             case True {
         let half = size / 2
         let mid = base + half
-        base = match cmp(get(list, mid), target)
+        base = match cmp(get(mid), target)
             case GreaterThan base
             case Equal mid
             case LessThan mid
         size = size - half
     }
 
-    match cmp(get(list, base), target)
+    match cmp(get(base), target)
         case Equal new Found[index = base]
         case GreaterThan new InsertAt[index = base]
         case LessThan new InsertAt[index = base + 1]
@@ -83,16 +96,15 @@ let binary_search = func(list, target, cmp) {
 
 # https://doc.rust-lang.org/1.88.0/src/alloc/vec/mod.rs.html#2002
 let insert = func(list, index, item) {
-    match index > list.len case True {
+    let l = len(list)
+    match index > l case True {
         return {}  # TODO throw exception
     }
-    push(list, {})  # grow_one
-
-    intrinsic slice_offset[p](list.slice, index)
-    match index < list.len case True {
-        intrinsic slice_copy(p, p + 1, list.len - index)
+    match cap(list) == l case True grow(list)
+    match index < l case True {
+        intrinsic list_copy_within(list.native, index, l - index, index + 1)
     }
-    intrinsic slice_store(p, 0, item)
-    list mut.len = list.len + 1
+    intrinsic list_store(list.native, index, item)
+    set_len(list, l + 1)
 }
 @export insert

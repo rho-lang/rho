@@ -1,7 +1,7 @@
 !input ../lang
 @import lang[trace]
 @import lang.cmp[cmp_int32 = int32]
-@import lang.list[create, push, get, binary_search, Found, InsertAt]
+@import lang.list[create, push, get, len, binary_search]
 @import lang.typing[True, False]
 
 let xs = create()
@@ -14,6 +14,7 @@ push(xs, 12)
 push(xs, 13)
 push(xs, 14)
 
-trace(binary_search(xs, 1, cmp_int32))
-trace(binary_search(xs, 12, cmp_int32))
-trace(binary_search(xs, 5, cmp_int32))
+let l = len(xs)
+trace(binary_search(func(i) get(xs, i), l, 1, cmp_int32))
+trace(binary_search(func(i) get(xs, i), l, 12, cmp_int32))
+trace(binary_search(func(i) get(xs, i), l, 5, cmp_int32))

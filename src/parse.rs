@@ -79,7 +79,9 @@ fn parse_directive(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
         ("spawn", parse_spawn),
         ("wait", parse_wait),
     ] {
-        if let Some(rest) = s.strip_prefix(prefix) {
+        if let Some(rest) = s.strip_prefix(prefix)
+            && !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+        {
             *s = trim(rest);
             return method(s);
         }
@@ -140,21 +142,24 @@ fn parse_expr3(s: &mut &str) -> Result<Expr, ParseError> {
 }
 
 fn parse_expr4(s: &mut &str) -> Result<Expr, ParseError> {
-    for (prefix, method) in [
+    for (prefix, id_prefix, method) in [
         (
             "{",
+            false,
             parse_compound as fn(&mut &str) -> Result<Expr, ParseError>,
         ),
-        ("\"", parse_string_literal),
-        ("func", parse_func),
-        ("signal", |_| Ok(Expr::Literal(Literal::Signal))),
-        ("match", parse_match),
-        ("new", parse_new),
-        ("type", parse_type),
+        ("\"", false, parse_string_literal),
+        ("func", true, parse_func),
+        ("signal", true, |_| Ok(Expr::Literal(Literal::Signal))),
+        ("match", true, parse_match),
+        ("new", true, parse_new),
+        ("type", true, parse_type),
         // just write `{}`
         // ("unit", |_| Ok(Expr::Literal(Literal::Unit))),
     ] {
-        if let Some(rest) = s.strip_prefix(prefix) {
+        if let Some(rest) = s.strip_prefix(prefix)
+            && (!id_prefix || !rest.starts_with(|c: char| c.is_alphabetic() || c == '_'))
+        {
             *s = trim(rest);
             return method(s);
         }

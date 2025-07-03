@@ -637,7 +637,7 @@ pub mod intrinsics {
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
         eval::{ExecuteError, Signal, TypeError, Value, value_slice_load, value_slice_store},
-        space::{Space, SpaceAddr},
+        space::{OutOfSpace, Space, SpaceAddr},
         typing::{RecordLayout, TypeId, TypeRegistry},
         worker::WorkerContext,
     };
@@ -645,16 +645,18 @@ pub mod intrinsics {
     pub fn preload(asset: &mut Asset) {
         START.with(|_| {}); // initialize the thread-local variable
         asset.intrinsics = [
-            ("trace", trace as Intrinsic),
+            ("list_cap", list_cap as Intrinsic),
+            ("list_copy_within", list_copy_within),
+            ("list_copy", list_copy),
+            ("list_len", list_len),
+            ("list_load", list_load),
+            ("list_new", list_new),
+            ("list_set_len", list_set_len),
+            ("list_store", list_store),
             ("oracle_advance_signal", oracle_advance_signal),
-            ("type_object", type_object),
             ("time_since_start", time_since_start),
-            ("slice_new", slice_new),
-            ("slice_load", slice_load),
-            ("slice_store", slice_store),
-            ("slice_copy", slice_copy),
-            ("slice_copy_nonoverlapping", slice_copy_nonoverlapping),
-            ("slice_offset", slice_offset),
+            ("trace", trace),
+            ("type_object", type_object),
         ]
         .map(|(s, f)| (s.into(), f))
         .into()
@@ -741,101 +743,161 @@ pub mod intrinsics {
         Ok(())
     }
 
-    struct Slice(SpaceAddr);
+    #[derive(Debug, Clone, Copy)]
+    struct List {
+        buf: SpaceAddr,
+        // these are kept natively (instead of as record attributes) for garbage
+        // collection purposes. `len` is for recursing into referenced values, `cap` is
+        // reset to `len` after the collection, which only allocate and copy up to `len`
+        len: usize,
+        cap: usize,
+    }
 
     impl Value {
-        // slice type
-        fn new_slice(Slice(addr): Slice) -> Self {
-            Self::new(TypeId::SLICE, addr)
+        fn alloc_list(cap: usize, space: &mut Space) -> Result<Self, OutOfSpace> {
+            let buf = space.alloc(size_of::<Value>() * cap, align_of::<Value>())?;
+            let addr = space.typed_alloc::<List>()?;
+            unsafe { space.typed_write(addr, List { buf, len: 0, cap }) }
+            Ok(Self::new(TypeId::LIST, addr))
         }
 
-        fn load_slice(&self) -> Result<Slice, TypeError> {
-            self.ensure_type(TypeId::SLICE)?;
-            Ok(Slice(self.addr()))
+        // it is also ok to have a load_list
+        fn get_list<'a>(&self, space: &'a Space) -> Result<&'a List, TypeError> {
+            self.ensure_type(TypeId::LIST)?;
+            Ok(unsafe { space.typed_get::<List>(self.addr()) })
+        }
+
+        fn get_list_mut<'a>(&self, space: &'a mut Space) -> Result<&'a mut List, TypeError> {
+            self.ensure_type(TypeId::LIST)?;
+            Ok(unsafe { space.typed_get_mut::<List>(self.addr()) })
         }
     }
 
-    fn slice_new(
+    fn list_new(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
+        let cap = values[indexes[1]].load_int32()?;
+        if cap < 0 {
+            todo!()
+        }
+        values[indexes[0]] = Value::alloc_list(cap as _, &mut context.space)?;
+        Ok(())
+    }
+
+    // list_push is implemented from lang side, with the following intrinsics
+    fn list_len(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        context: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let list = values[indexes[1]].get_list(&context.space)?;
+        values[indexes[0]] = Value::new_int32(list.len as _);
+        Ok(())
+    }
+
+    fn list_set_len(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        context: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let list = values[indexes[0]].get_list_mut(&mut context.space)?;
         let len = values[indexes[1]].load_int32()?;
-        let slice = Slice(
-            context
-                .space
-                .alloc(size_of::<Value>() * len as usize, align_of::<Value>())?,
-        );
-        values[indexes[0]] = Value::new_slice(slice);
+        assert!(len >= 0);
+        assert!(len as usize <= list.cap);
+        list.len = len as _;
         Ok(())
     }
 
-    fn slice_load(
+    fn list_cap(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let Slice(buf) = values[indexes[1]].load_slice()?;
-        let pos = values[indexes[2]].load_int32()?;
-        values[indexes[0]] = unsafe { value_slice_load(&context.space, buf, pos as _) };
-        Ok(())
-    }
-
-    fn slice_store(
-        values: &mut [Value],
-        indexes: &[ValueIndex],
-        context: &mut WorkerContext,
-    ) -> Result<(), ExecuteError> {
-        let Slice(buf) = values[indexes[0]].load_slice()?;
-        let pos = values[indexes[1]].load_int32()?;
-        unsafe { value_slice_store(&mut context.space, buf, pos as _, values[indexes[2]]) }
-        Ok(())
-    }
-
-    fn slice_offset(
-        values: &mut [Value],
-        indexes: &[ValueIndex],
-        _: &mut WorkerContext,
-    ) -> Result<(), ExecuteError> {
-        let Slice(buf) = values[indexes[1]].load_slice()?;
-        let offset = values[indexes[2]].load_int32()?;
-        values[indexes[0]] = Value::new_slice(Slice(buf + offset as usize * size_of::<Value>()));
+        let list = values[indexes[1]].get_list(&context.space)?;
+        values[indexes[0]] = Value::new_int32(list.cap as _);
         Ok(())
     }
 
     // while this can be achieved by per-value load + store, expect a performance
     // gap to necessitate
-    fn slice_copy(
+    fn list_copy(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let Slice(src) = values[indexes[0]].load_slice()?;
-        let Slice(dst) = values[indexes[1]].load_slice()?;
-        let len = values[indexes[2]].load_int32()?;
+        let src = values[indexes[0]].get_list(&context.space)?;
+        let dst = values[indexes[1]].get_list(&context.space)?;
+        let len = src.len;
+        assert!(dst.cap >= len);
+        let src_buf = src.buf;
+        let dst_buf = dst.buf;
+        assert_ne!(src_buf, dst_buf);
         unsafe {
-            copy(
-                context.space.typed_get::<Value>(src),
-                context.space.typed_get_mut(dst),
-                len as _,
-            );
+            copy_nonoverlapping(
+                context.space.typed_get::<Value>(src_buf),
+                context.space.typed_get_mut(dst_buf),
+                len,
+            )
         }
         Ok(())
     }
 
-    fn slice_copy_nonoverlapping(
+    fn list_load(
         values: &mut [Value],
         indexes: &[ValueIndex],
         context: &mut WorkerContext,
     ) -> Result<(), ExecuteError> {
-        let Slice(src) = values[indexes[0]].load_slice()?;
-        let Slice(dst) = values[indexes[1]].load_slice()?;
+        let list = values[indexes[1]].get_list(&context.space)?;
+        let pos = values[indexes[2]].load_int32()?;
+        assert!(pos >= 0);
+        assert!((pos as usize) < list.len); // avoid exposing garbage value to lang
+        values[indexes[0]] = unsafe { value_slice_load(&context.space, list.buf, pos as _) };
+        Ok(())
+    }
+
+    fn list_store(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        context: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let list = values[indexes[0]].get_list(&context.space)?;
+        let pos = values[indexes[1]].load_int32()?;
+        assert!(pos >= 0);
+        assert!((pos as usize) < list.cap); // as long as not overflowing it is fine
+        let buf = list.buf;
+        unsafe { value_slice_store(&mut context.space, buf, pos as _, values[indexes[2]]) }
+        Ok(())
+    }
+
+    // similar to list_copy but for a performant list_insert and list_remove
+    fn list_copy_within(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        context: &mut WorkerContext,
+    ) -> Result<(), ExecuteError> {
+        let list = values[indexes[0]].get_list(&context.space)?;
+        let src = values[indexes[1]].load_int32()?;
         let len = values[indexes[2]].load_int32()?;
+        let dst = values[indexes[3]].load_int32()?;
+        assert!(src >= 0);
+        assert!(dst >= 0);
+        assert!(len > 0);
+        let src = src as usize;
+        let dst = dst as usize;
+        let len = len as usize;
+        assert!(src + len <= list.len);
+        assert!(dst + len <= list.len);
         unsafe {
-            copy_nonoverlapping(
-                context.space.typed_get::<Value>(src),
-                context.space.typed_get_mut(dst),
-                len as _,
+            copy(
+                context
+                    .space
+                    .typed_get::<Value>(list.buf + src * size_of::<Value>()),
+                context
+                    .space
+                    .typed_get_mut(list.buf + dst * size_of::<Value>()),
+                len,
             );
         }
         Ok(())
