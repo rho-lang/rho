@@ -25,16 +25,6 @@ struct Frame {
     values: Vec<Value>,
 }
 
-impl Eval {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn init(&mut self, closure: Closure, asset: &Asset) -> Result<(), ArityError> {
-        self.push_frame(closure, &[], asset)
-    }
-}
-
 // optimization plan: pack Value into a u64 word. 24 bits for `type_id` and 40
 // bits for `data`. assuming Space alignment >= 8 (or else a 4 byte data can be
 // stored inline), 40 bits address space = 2^(40+3) byte or 8 TB heap space
@@ -112,6 +102,15 @@ impl Closure {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Signal(NotifyToken);
+
+impl Eval {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 #[derive(Error, Debug)]
 #[error("arity error: accept {expected} arguments, but got {actual}")]
 pub struct ArityError {
@@ -120,6 +119,10 @@ pub struct ArityError {
 }
 
 impl Eval {
+    pub fn init(&mut self, closure: Closure, asset: &Asset) -> Result<(), ArityError> {
+        self.push_frame(closure, &[], asset)
+    }
+
     fn push_frame(
         &mut self,
         closure: Closure,
@@ -147,16 +150,6 @@ impl Eval {
         Ok(())
     }
 }
-
-struct Unit;
-
-struct String {
-    buf: SpaceAddr,
-    len: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Signal(NotifyToken);
 
 pub enum ExecuteStatus {
     Waiting(NotifyToken),
@@ -477,6 +470,8 @@ pub struct TypeError {
     pub actual: TypeId,
 }
 
+struct Unit;
+
 impl Value {
     fn ensure_type(&self, expected: TypeId) -> Result<(), TypeError> {
         if self.type_id() != expected {
@@ -563,24 +558,6 @@ impl Value {
     fn load_unit(&self) -> Result<Unit, TypeError> {
         self.ensure_type(TypeId::UNIT)?;
         Ok(Unit)
-    }
-
-    // String
-    fn alloc_string(literal: &str, space: &mut Space) -> Result<Self, OutOfSpace> {
-        let len = literal.len();
-        // allocate buffer first, otherwise if buffer fails to allocate while String
-        // itself succeeds, marking String would encounter invalid SpaceAddr
-        let buf = space.alloc(len, 1)?;
-        space.get_mut(buf, len).copy_from_slice(literal.as_bytes());
-        let addr = space.typed_alloc::<String>()?;
-        unsafe { space.typed_write(addr, String { buf, len }) }
-        Ok(Self::new(TypeId::STRING, addr))
-    }
-
-    fn get_str<'a>(&self, space: &'a Space) -> Result<&'a str, TypeError> {
-        self.ensure_type(TypeId::STRING)?;
-        let string = unsafe { space.typed_get::<String>(self.addr()) };
-        Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
     }
 
     // Int32 type
@@ -679,6 +656,31 @@ pub mod intrinsics {
     //     }
     // }
 
+    struct String {
+        buf: SpaceAddr,
+        len: usize,
+        // TODO add cap
+    }
+
+    impl Value {
+        pub fn alloc_string(literal: &str, space: &mut Space) -> Result<Self, OutOfSpace> {
+            let len = literal.len();
+            // allocate buffer first, otherwise if buffer fails to allocate while String
+            // itself succeeds, marking String would encounter invalid SpaceAddr
+            let buf = space.alloc(len, 1)?;
+            space.get_mut(buf, len).copy_from_slice(literal.as_bytes());
+            let addr = space.typed_alloc::<String>()?;
+            unsafe { space.typed_write(addr, String { buf, len }) }
+            Ok(Self::new(TypeId::STRING, addr))
+        }
+
+        fn get_str<'a>(&self, space: &'a Space) -> Result<&'a str, TypeError> {
+            self.ensure_type(TypeId::STRING)?;
+            let string = unsafe { space.typed_get::<String>(self.addr()) };
+            Ok(unsafe { str::from_utf8_unchecked(space.get(string.buf, string.len)) })
+        }
+    }
+
     fn trace(
         values: &mut [Value],
         indexes: &[ValueIndex],
@@ -686,7 +688,11 @@ pub mod intrinsics {
     ) -> Result<(), ExecuteError> {
         let value = values[indexes[0]];
 
-        fn format_value(value: Value, space: &Space, registry: &TypeRegistry) -> String {
+        fn format_value(
+            value: Value,
+            space: &Space,
+            registry: &TypeRegistry,
+        ) -> std::string::String {
             if let Ok(message) = value.get_str(space) {
                 message.into()
             } else if let Ok(int32) = value.load_int32() {
