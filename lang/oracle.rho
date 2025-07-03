@@ -2,7 +2,7 @@
 !input typing
 @package lang.oracle
 @import lang[trace]
-@import lang.typing[True]
+@import lang.typing[True, False]
 
 let yield_sig = signal
 let num_yielded = 0
@@ -24,7 +24,7 @@ spawn func() {
         wait oracle_advance
         trace("[oracle] waked up")
 
-        match num_yielded != 0 case True => {
+        match num_yielded != 0 case False => {} case True => {
             notify yield_sig
             num_yielded = 0
             continue

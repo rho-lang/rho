@@ -179,6 +179,8 @@ pub enum ExecuteError {
     UnexpectedAttr(std::string::String),
     #[error("missing attributes during record initialization")]
     MissingAttr,
+    #[error("unreachable: {0}")]
+    Unreachable(&'static str),
 }
 
 impl Eval {
@@ -270,14 +272,6 @@ impl Eval {
                         let Signal(notify_token) =
                             frame.values[*signal].load_signal(&context.space)?;
                         context.sched.notify_clear(notify_token)
-                    }
-
-                    Instr::Intrinsic(intrinsic, indexes) => {
-                        intrinsic(&mut frame.values, indexes, context)?
-                    }
-                    Instr::Copy(dst, src) => {
-                        let src_value = frame.values[*src];
-                        frame.values[*dst] = src_value
                     }
 
                     Instr::MakeClosure(dst, block_id) => {
@@ -447,6 +441,17 @@ impl Eval {
                             }
                         };
                         frame.values[*dst] = dst_value
+                    }
+
+                    Instr::Copy(dst, src) => {
+                        let src_value = frame.values[*src];
+                        frame.values[*dst] = src_value
+                    }
+                    Instr::Intrinsic(intrinsic, indexes) => {
+                        intrinsic(&mut frame.values, indexes, context)?
+                    }
+                    Instr::Unreachable(msg) => {
+                        return Err(ExecuteError::Unreachable(*msg));
                     }
                 }
 

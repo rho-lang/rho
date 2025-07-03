@@ -11,9 +11,8 @@ let InsertAt = type[index]
 
 # https://doc.rust-lang.org/1.88.0/src/core/slice/mod.rs.html#2880-2882
 let binary_search = func(get, len, target, cmp) {
-
     let size = len
-    match size == 0 case True => {
+    match size == 0 case False => {} case True => {
         return new InsertAt[index = 0]
     }
 

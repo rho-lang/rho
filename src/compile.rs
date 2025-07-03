@@ -367,7 +367,7 @@ impl Compile {
                     }
                     hit_jumps.push((jump_indexes, expr))
                 }
-                self.add(Instr::MakeUnit(expr_index));
+                self.add(Instr::Unreachable("all cases missed"));
                 let case_end_target = self.block.instrs.len();
                 self.add(Instr::Jump(InstrIndex::MAX, None)); // placeholder
 

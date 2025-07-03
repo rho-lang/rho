@@ -118,6 +118,7 @@ pub enum Instr {
     Wait(ValueIndex),
     Notify(ValueIndex),
 
+    Unreachable(&'static str),
     Intrinsic(instr::Intrinsic, Vec<ValueIndex>),
 }
 

@@ -38,14 +38,14 @@ let grow = func(list) {
 
 let push = func(list, item) {
     let l = len(list)
-    match l == cap(list) case True => grow(list)
+    match l == cap(list) case True => grow(list) case False => {}
     intrinsic list_store(list.native, l, item)
     set_len(list, l + 1)
 }
 @export push
 
 let get = func(list, index) {
-    match index >= len(list) case True => {
+    match index >= len(list) case False => {} case True => {
         return {}  # TODO throw exception
     }
     intrinsic list_load[item](list.native, index)
@@ -54,7 +54,7 @@ let get = func(list, index) {
 @export get
 
 let set = func(list, index, item) {
-    match index >= len(list) case True => {
+    match index >= len(list) case False => {} case True => {
         return {}  # TODO throw exception
     }
     intrinsic list_store(list.native, index, item)
@@ -64,11 +64,11 @@ let set = func(list, index, item) {
 # https://doc.rust-lang.org/1.88.0/src/alloc/vec/mod.rs.html#2002
 let insert = func(list, index, item) {
     let l = len(list)
-    match index > l case True => {
+    match index > l case False => {} case True => {
         return {}  # TODO throw exception
     }
-    match cap(list) == l case True => grow(list)
-    match index < l case True => {
+    match cap(list) == l case True => grow(list) case False => {}
+    match index < l case False => {} case True => {
         intrinsic list_copy_within(list.native, index, l - index, index + 1)
     }
     intrinsic list_store(list.native, index, item)
