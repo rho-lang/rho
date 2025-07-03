@@ -1,8 +1,8 @@
 !input ../lang
 @import lang[trace]
 @import lang.cmp[cmp_int32 = int32]
-@import lang.list[create, push, get, len, binary_search]
-@import lang.typing[True, False]
+@import lang.list[create, push, get, len]
+@import lang.search[binary_search]
 
 let xs = create()
 push(xs, 1)

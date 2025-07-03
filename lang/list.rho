@@ -61,39 +61,6 @@ let set = func(list, index, item) {
 }
 @export set
 
-let Found = type[index]
-let InsertAt = type[index]
-# https://doc.rust-lang.org/1.88.0/src/core/slice/mod.rs.html#2880-2882
-let binary_search = func(get, len, target, cmp) {
-    @import lang.cmp[GreaterThan, Equal, LessThan]
-
-    let size = len
-    match size == 0 case True {
-        return new InsertAt[index = 0]
-    }
-
-    let base = 0
-    loop match size > 1
-            case False { break }
-            case True {
-        let half = size / 2
-        let mid = base + half
-        base = match cmp(get(mid), target)
-            case GreaterThan base
-            case Equal mid
-            case LessThan mid
-        size = size - half
-    }
-
-    match cmp(get(base), target)
-        case Equal new Found[index = base]
-        case GreaterThan new InsertAt[index = base]
-        case LessThan new InsertAt[index = base + 1]
-}
-@export Found
-@export InsertAt
-@export binary_search
-
 # https://doc.rust-lang.org/1.88.0/src/alloc/vec/mod.rs.html#2002
 let insert = func(list, index, item) {
     let l = len(list)

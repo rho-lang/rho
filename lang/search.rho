@@ -1,0 +1,38 @@
+!input cmp
+!input typing
+@package lang.search
+@import lang.cmp[GreaterThan, Equal, LessThan]
+@import lang.typing[True, False]
+
+let Found = type[index]
+let InsertAt = type[index]
+@export Found
+@export InsertAt
+
+# https://doc.rust-lang.org/1.88.0/src/core/slice/mod.rs.html#2880-2882
+let binary_search = func(get, len, target, cmp) {
+
+    let size = len
+    match size == 0 case True {
+        return new InsertAt[index = 0]
+    }
+
+    let base = 0
+    loop match size > 1
+            case False { break }
+            case True {
+        let half = size / 2
+        let mid = base + half
+        base = match cmp(get(mid), target)
+            case GreaterThan base
+            case Equal mid
+            case LessThan mid
+        size = size - half
+    }
+
+    match cmp(get(base), target)
+        case Equal new Found[index = base]
+        case GreaterThan new InsertAt[index = base]
+        case LessThan new InsertAt[index = base + 1]
+}
+@export binary_search
