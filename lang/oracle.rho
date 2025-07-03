@@ -24,7 +24,7 @@ spawn func() {
         wait oracle_advance
         trace("[oracle] waked up")
 
-        match num_yielded != 0 case True {
+        match num_yielded != 0 case True => {
             notify yield_sig
             num_yielded = 0
             continue

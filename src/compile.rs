@@ -351,28 +351,34 @@ impl Compile {
             Expr::Match(match_expr) => {
                 self.input_expr(match_expr.scrutinee, asset)?;
                 let mut hit_jumps = Vec::new();
-                for (pattern, expr) in match_expr.cases {
-                    self.block.expr_index = expr_index + 1;
-                    self.input_expr(pattern, asset)?;
-                    hit_jumps.push((self.block.instrs.len(), expr));
-                    self.add(Instr::Jump(
-                        InstrIndex::MAX, // placeholder
-                        Some(Match {
-                            scrutinee: expr_index,
-                            pattern: expr_index + 1,
-                        }),
-                    ));
+                for (patterns, expr) in match_expr.cases {
+                    let mut jump_indexes = Vec::new();
+                    for pattern in patterns {
+                        self.block.expr_index = expr_index + 1;
+                        self.input_expr(pattern, asset)?;
+                        jump_indexes.push(self.block.instrs.len());
+                        self.add(Instr::Jump(
+                            InstrIndex::MAX, // placeholder
+                            Some(Match {
+                                scrutinee: expr_index,
+                                pattern: expr_index + 1,
+                            }),
+                        ))
+                    }
+                    hit_jumps.push((jump_indexes, expr))
                 }
                 self.add(Instr::MakeUnit(expr_index));
                 let case_end_target = self.block.instrs.len();
                 self.add(Instr::Jump(InstrIndex::MAX, None)); // placeholder
 
-                for (jump_index, expr) in hit_jumps {
+                for (jump_indexes, expr) in hit_jumps {
                     let target = self.block.instrs.len();
-                    let Instr::Jump(index, _) = &mut self.block.instrs[jump_index] else {
-                        unreachable!()
-                    };
-                    *index = target;
+                    for jump_index in jump_indexes {
+                        let Instr::Jump(index, _) = &mut self.block.instrs[jump_index] else {
+                            unreachable!()
+                        };
+                        *index = target
+                    }
 
                     self.block.expr_index = expr_index;
                     self.input_expr(expr, asset)?;
