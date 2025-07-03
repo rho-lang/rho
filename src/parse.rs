@@ -191,18 +191,18 @@ fn parse_import(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     *s = consume(trim(s), '[', "imported name list")?;
     let imports = extract_delimited(s, |s| {
         let id = extract_identifier(s)?;
-        let imported_id = if let Some(rest) = trim(s).strip_prefix("=") {
+        let alias_id = if let Some(rest) = trim(s).strip_prefix("as") {
             *s = trim(rest);
             extract_identifier(s)?
         } else {
             id
         };
-        Ok((id.into(), imported_id.into()))
+        Ok((id.into(), alias_id.into()))
     });
     *s = consume(trim(s), ']', "closing bracket of imported name list")?;
     let stmts = imports
         .into_iter()
-        .map(|(id, imported_id)| Stmt::Bind(id, Expr::Import(name.clone(), imported_id)))
+        .map(|(id, alias_id)| Stmt::Bind(alias_id, Expr::Import(name.clone(), id)))
         .collect();
     Ok(stmts)
 }

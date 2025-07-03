@@ -1,6 +1,6 @@
 !input ../lang
 @import lang[trace]
-@import lang.cmp[cmp_int32 = int32]
+@import lang.cmp[int32 as cmp_int32]
 @import lang.list[create, push, get, len]
 @import lang.search[binary_search]
 
