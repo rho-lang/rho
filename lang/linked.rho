@@ -1,0 +1,42 @@
+!input typing
+@package lang.linked
+@import lang.typing[True, False]
+
+let List = type[len, tail]
+@export List
+
+let create = func() new List[len = 0, tail = {}]
+@export create
+
+let push_back = func(list, ItemType, item) {
+    match list case List => {}
+    match item case ItemType => {}
+
+    match list.len == 0
+    case True => {
+        list mut.tail = item
+    }
+    case False => {
+        item mut.next = list.tail.next
+    }
+    list.tail mut.next = item
+    list mut.tail = item
+    list mut.len = list.len + 1
+}
+@export push_back
+
+let pop_front = func(list) {
+    match list case List => {}
+
+    match list.len == 0
+        case True => {}  # TODO throw
+        case False => {
+            let item = list.tail.next
+            match list.len == 1
+                case True => { list mut.tail = {} }
+                case False => { list.tail mut.next = item.next }
+            list mut.len = list.len - 1
+            item
+        }
+}
+@export pop_front

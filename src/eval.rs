@@ -692,29 +692,38 @@ pub mod intrinsics {
             value: Value,
             space: &Space,
             registry: &TypeRegistry,
+            top: bool,
         ) -> std::string::String {
             if let Ok(message) = value.get_str(space) {
                 message.into()
             } else if let Ok(int32) = value.load_int32() {
                 int32.to_string()
             } else if let Some(RecordLayout(attrs)) = registry.get_record_layout(value.type_id()) {
-                let attrs = attrs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &attr)| {
-                        let attr_value = unsafe { value_slice_load(space, value.addr(), i) };
-                        // TODO get interned string
-                        format!("{} = {}", attr, format_value(attr_value, space, registry))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let attrs = if top {
+                    attrs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &attr)| {
+                            let attr_value = unsafe { value_slice_load(space, value.addr(), i) };
+                            // TODO get interned string
+                            format!(
+                                "{} = {}",
+                                attr,
+                                format_value(attr_value, space, registry, false)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                } else {
+                    "...".into()
+                };
                 format!("record({:?})[{attrs}]", value.type_id())
             } else {
                 "<unknown>".into() // TODO
             }
         }
 
-        tracing::info!(value = format_value(value, &context.space, &context.registry));
+        tracing::info!(value = format_value(value, &context.space, &context.registry, true));
         Ok(())
     }
 

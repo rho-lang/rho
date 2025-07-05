@@ -63,7 +63,7 @@ impl Compile {
         let block = Block {
             name: "<main>".into(),
             num_param: 0,
-            num_value: self.block.num_value,
+            num_value: self.block.num_value.max(1),  // 1 value is used above
             instrs: self.block.instrs,
         };
         Closure::new(asset.add_block(block))

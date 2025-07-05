@@ -1,0 +1,13 @@
+!input ../lang
+@import lang[trace]
+@import lang.linked[create, push_back, pop_front]
+
+let Item = type[value, next]
+
+let queue = create()
+push_back(queue, Item, new Item[value = 1, next = {}])
+push_back(queue, Item, new Item[value = 2, next = {}])
+push_back(queue, Item, new Item[value = 3, next = {}])
+trace(pop_front(queue))
+trace(pop_front(queue))
+trace(pop_front(queue))

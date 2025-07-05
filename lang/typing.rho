@@ -1,6 +1,8 @@
 @package lang.typing
 
 # remember to update every time that TypeId constants are changed
+intrinsic type_object[Unit](5)
+@export Unit
 intrinsic type_object[True](8)
 @export True
 intrinsic type_object[False](9)
