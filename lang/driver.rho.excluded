@@ -1,0 +1,9 @@
+!input package
+!input typing
+@package lang.driver
+@import lang[trace]
+
+let park = func() {
+    trace("[driver] park")
+    intrinsic park
+}

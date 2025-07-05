@@ -1,10 +1,13 @@
 # https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
+!input driver
+!input linked
 !input package
 !input typing
 @package lang.sched
 @import lang[trace]
-@import lang.typing[Unit, True, False]
+@import lang.driver[park as driver_park]
 @import lang.linked[create as create_queue, push_back, pop_front]
+@import lang.typing[Unit, True, False]
 
 # low-level free-from interfaces
 # sched(func() {
@@ -43,7 +46,9 @@ let switch_next_ready = func() {
         switch current_task.native
     }
     case True => {
-        # TODO
+        driver_park()
+        match ready_queue.len != 0 case True => {}
+        switch_next_ready()
     }
 }
 
