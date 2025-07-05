@@ -1,0 +1,91 @@
+# https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/
+!input package
+!input typing
+@package lang.sched
+@import lang[trace]
+@import lang.typing[Unit, True, False]
+@import lang.linked[create as create_queue, push_back, pop_front]
+
+# low-level free-from interfaces
+# sched(func() {
+#     let signal = create_signal()
+#     spawn(func() notify(signal))
+#     wait(signal)
+# })
+
+# high-level structured concurrency interfaces
+# with(func(context) {
+#     let signal = create_signal()
+#     let task = spawn(context, func() wait(signal))
+#     spawn(context, func() notify(signal))
+#     complete(task)
+#
+#     let nested_task = spawn_with(context, func(context) {
+#         some_processing(complete(spawn(context, ...)))
+#     })
+#     let nested_result = complete(nested_task)
+#     ...
+# })
+
+let Task = type[native, next]
+
+let ready_queue = create_queue()
+let current_task = {}
+
+let push_ready = func(task) {
+    push_back(ready_queue, Task, task)
+}
+
+let switch_next_ready = func() {
+    match ready_queue.len == 0
+    case False => {
+        current_task = pop_front(ready_queue)
+        switch current_task.native
+    }
+    case True => {
+        # TODO
+    }
+}
+
+let spawn = func(f) {
+    intrinsic task_new[native](func() {
+        let result = f()
+        match result case Unit => {}
+        switch_next_ready()
+    })
+    push_ready(new Task[native = native, next = {}])
+}
+@export spawn
+
+let sched = func(workflow) {
+    spawn(func() {
+        let result = workflow(context)
+        match result case Unit => {}
+        # the entire worker ends here
+    })
+    switch_next_ready()
+}
+@export sched
+
+let Signal = type[parking_queue]
+
+let create_signal = func() new Signal[parking_queue = create_queue()]
+@export create_signal
+
+let wait = func(signal) {
+    match signal case Signal => {}
+    push_back(signal.parking_queue, Task, current_task)
+    switch_next_ready()
+}
+@export wait
+
+let notify = func(signal) {
+    match signal case Signal => {}
+    let l = signal.parking_queue.len
+    loop match l > 0 case False { break } case True {
+        push_ready(pop_front(signal.parking_queue))
+        l = l - 1
+    }
+}
+@export notify
+
