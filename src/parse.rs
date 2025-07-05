@@ -74,10 +74,8 @@ fn parse_directive(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
         ("intrinsic", parse_intrinsic),
         ("let", parse_let),
         ("loop", parse_loop),
-        ("notify", parse_notify),
         ("return", parse_return),
-        ("spawn", parse_spawn),
-        ("wait", parse_wait),
+        ("switch", parse_switch),
     ] {
         if let Some(rest) = s.strip_prefix(prefix)
             && !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_')
@@ -150,7 +148,6 @@ fn parse_expr4(s: &mut &str) -> Result<Expr, ParseError> {
         ),
         ("\"", false, parse_string_literal),
         ("func", true, parse_func),
-        ("signal", true, |_| Ok(Expr::Literal(Literal::Signal))),
         ("match", true, parse_match),
         ("new", true, parse_new),
         ("type", true, parse_type),
@@ -250,20 +247,12 @@ fn parse_loop(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     Ok(vec![Stmt::Loop(parse_expr(s)?)])
 }
 
-fn parse_notify(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
-    Ok(vec![Stmt::Notify(parse_expr(s)?)])
-}
-
 fn parse_return(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
     Ok(vec![Stmt::Return(parse_expr(s)?)])
 }
 
-fn parse_spawn(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
-    Ok(vec![Stmt::Spawn(parse_expr(s)?)])
-}
-
-fn parse_wait(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
-    Ok(vec![Stmt::Wait(parse_expr(s)?)])
+fn parse_switch(s: &mut &str) -> Result<Vec<Stmt>, ParseError> {
+    Ok(vec![Stmt::Switch(parse_expr(s)?)])
 }
 
 fn parse_compound(s: &mut &str) -> Result<Expr, ParseError> {

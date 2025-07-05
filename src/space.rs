@@ -1,8 +1,4 @@
-use std::borrow::BorrowMut;
-
 use thiserror::Error;
-
-use crate::task::Task;
 
 #[derive(Default)]
 pub struct Space {
@@ -35,11 +31,7 @@ impl Space {
         Ok(addr)
     }
 
-    pub fn copy_collect(
-        &mut self,
-        OutOfSpace(requested_size): OutOfSpace,
-        tasks: impl Iterator<Item = impl BorrowMut<Task>>,
-    ) {
+    pub fn copy_collect(&mut self, OutOfSpace(requested_size): OutOfSpace, addr: SpaceAddr) {
         todo!()
     }
 
@@ -67,8 +59,12 @@ impl Space {
     }
 
     /// # Safety
-    /// Same as `typed_get`.
-    pub unsafe fn typed_get_mut<T>(&mut self, addr: SpaceAddr) -> &mut T {
+    /// Same as `typed_get`. Additionally, caller must ensure multiple mutable
+    /// references to the same `T` do not have overlapping lifetimes.
+
+    // maybe bind the lifetime to `addr` would be better? probably only since it is
+    // `Copy`
+    pub unsafe fn typed_get_mut<'a, T>(&mut self, addr: SpaceAddr) -> &'a mut T {
         let addr = self.get_mut(addr, size_of::<T>()).as_mut_ptr().cast::<T>();
         assert!(addr.is_aligned());
         unsafe { &mut *addr }

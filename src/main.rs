@@ -3,11 +3,11 @@ mod code;
 mod compile;
 mod eval;
 mod parse;
-mod sched;
+// mod sched;
 mod space;
-mod task;
+// mod task;
 mod typing;
-mod worker;
+// mod worker;
 
 use std::{
     collections::HashSet,
@@ -22,7 +22,7 @@ use walkdir::WalkDir;
 use crate::{
     asset::Asset,
     compile::Compile,
-    eval::{Closure, intrinsics},
+    eval::{Closure, Eval, intrinsics},
     parse::Source,
     typing::TypeRegistry,
 };
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    worker::run(prog, registry, asset.into());
+    Eval::new(registry, asset.into()).run(prog)?;
     Ok(())
 }
 

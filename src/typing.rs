@@ -35,17 +35,17 @@ impl TypeId {
     // basically just Value, but dedicated for closure capturing
     // following Python's terminology
     pub const CELL: Self = Self(3);
-    pub const SIGNAL: Self = Self(4);
-    pub const LIST: Self = Self(10); // from this point i decide to not renumber the types
+    pub const TASK: Self = Self(4);
 
     // core record types
     pub const UNIT: Self = Self(5);
 
-    // essential native (or marker) types
+    // essential types
     pub const STRING: Self = Self(6);
     pub const INT32: Self = Self(7);
     pub const TRUE: Self = Self(8);
     pub const FALSE: Self = Self(9);
+    pub const LIST: Self = Self(10); // from this point i decide to not renumber the types
 
     pub const RESERVED_MAX: Self = Self(100);
 }

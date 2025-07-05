@@ -11,12 +11,9 @@ pub enum Stmt {
     Loop(Expr),
     Break,
     Continue,
-    Return(Expr),
 
-    // concurrency primitives
-    Wait(Expr),   // wait on a Signal to notify
-    Notify(Expr), // notify all tasks `Wait`ing on a Signal
-    Spawn(Expr),
+    Return(Expr),
+    Switch(Expr),
 
     Bind(String, Expr),
     Mut(String, Expr),
@@ -47,7 +44,6 @@ pub enum Expr {
 #[derive(Debug)]
 pub enum Literal {
     Unit,
-    Signal, // the synchronization object
     String(String),
     I32(i32),
 }
@@ -102,8 +98,6 @@ pub enum Instr {
     MakeRecordType(ValueIndex, RecordLayout),
     MakeRecord(ValueIndex, ValueIndex, Vec<(StringId, ValueIndex)>), // dst, type_id, attrs
 
-    MakeSignal(ValueIndex),
-
     Copy(ValueIndex, ValueIndex),
     Op2(ValueIndex, Op2, ValueIndex, ValueIndex),
 
@@ -113,10 +107,7 @@ pub enum Instr {
     Jump(InstrIndex, Option<instr::Match>),
     Call(ValueIndex, ValueIndex, Vec<ValueIndex>), // dst, closure, args
     Return(ValueIndex),
-
-    Spawn(ValueIndex),
-    Wait(ValueIndex),
-    Notify(ValueIndex),
+    Switch(ValueIndex),
 
     Unreachable(&'static str),
     Intrinsic(instr::Intrinsic, Vec<ValueIndex>),
@@ -147,13 +138,12 @@ pub enum Op2 {
 }
 
 pub mod instr {
-    use crate::worker::WorkerContext;
+    use crate::eval::Eval;
 
     use super::*;
 
     // currently not seen any intrinsic that need to be `unsafe`
-    pub type Intrinsic =
-        fn(&mut [Value], &[ValueIndex], &mut WorkerContext) -> Result<(), ExecuteError>;
+    pub type Intrinsic = fn(&mut [Value], &[ValueIndex], &mut Eval) -> Result<(), ExecuteError>;
 
     #[derive(Debug)]
     pub struct Match {

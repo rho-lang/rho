@@ -63,7 +63,7 @@ impl Compile {
         let block = Block {
             name: "<main>".into(),
             num_param: 0,
-            num_value: self.block.num_value.max(1),  // 1 value is used above
+            num_value: self.block.num_value.max(1), // 1 value is used above
             instrs: self.block.instrs,
         };
         Closure::new(asset.add_block(block))
@@ -256,17 +256,9 @@ impl Compile {
                 self.input_expr(expr, asset)?;
                 self.add(Instr::Return(expr_index))
             }
-            Stmt::Wait(expr) => {
+            Stmt::Switch(expr) => {
                 self.input_expr(expr, asset)?;
-                self.add(Instr::Wait(expr_index))
-            }
-            Stmt::Notify(expr) => {
-                self.input_expr(expr, asset)?;
-                self.add(Instr::Notify(expr_index))
-            }
-            Stmt::Spawn(expr) => {
-                self.input_expr(expr, asset)?;
-                self.add(Instr::Spawn(expr_index))
+                self.add(Instr::Switch(expr_index))
             }
             Stmt::Expr(expr) => self.input_expr(expr, asset)?,
         }
@@ -466,7 +458,6 @@ impl Compile {
             Expr::Literal(Literal::String(string)) => {
                 self.add(Instr::MakeString(expr_index, string))
             }
-            Expr::Literal(Literal::Signal) => self.add(Instr::MakeSignal(expr_index)),
             Expr::Literal(Literal::I32(value)) => self.add(Instr::MakeI32(expr_index, value)),
         }
         Ok(())
