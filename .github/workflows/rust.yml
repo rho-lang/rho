@@ -35,4 +35,4 @@ jobs:
     # - name: Run tests
     #   run: cargo test --verbose
     - name: Run featured
-      run: cargo run --verbose --release -- featured/sync_primitives.rho
+      run: cargo run --verbose --release -- featured/low_level_async.rho
