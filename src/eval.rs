@@ -107,6 +107,20 @@ struct Frame {
     values: [Value; 256],
 }
 
+impl Default for Task {
+    fn default() -> Self {
+        Self {
+            frames: [(); 16].map(|_| Frame {
+                closure: Closure::new(u32::MAX),
+                instr_pointer: 0,
+                call_dst: None,
+                values: [Value::default(); 256],
+            }),
+            num_frame: 0,
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 #[error("arity error: accept {expected} arguments, but got {actual}")]
 pub struct ArityError {
@@ -186,15 +200,7 @@ pub enum ExecuteError {
 
 impl Eval {
     pub fn run(mut self, main: Closure) -> Result<(), ExecuteError> {
-        let mut task = Task {
-            frames: [(); 16].map(|_| Frame {
-                closure: Closure::new(u32::MAX),
-                instr_pointer: 0,
-                call_dst: None,
-                values: [Value::default(); 256],
-            }),
-            num_frame: 0,
-        };
+        let mut task = Task::default();
         task.push_frame(main, &[], &self.asset)?;
         let task_value = Value::alloc_task(task, &mut self.space)?;
         self.task_addr = task_value.addr();
@@ -627,7 +633,7 @@ pub mod intrinsics {
     use crate::{
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
-        eval::{Eval, ExecuteError, TypeError, Value, value_slice_load, value_slice_store},
+        eval::{Eval, ExecuteError, Task, TypeError, Value, value_slice_load, value_slice_store},
         space::{OutOfSpace, Space, SpaceAddr},
         typing::{RecordLayout, TypeId, TypeRegistry},
     };
@@ -643,6 +649,8 @@ pub mod intrinsics {
             ("list_new", list_new),
             ("list_set_len", list_set_len),
             ("list_store", list_store),
+            ("park", park),
+            ("task_new", task_new),
             ("time_since_start", time_since_start),
             ("trace", trace),
             ("type_object", type_object),
@@ -657,11 +665,22 @@ pub mod intrinsics {
         ParseDuration(#[from] humantime::DurationError),
     }
 
-    // impl<E: Into<Error>> From<E> for ExecuteError {
-    //     fn from(err: E) -> Self {
-    //         ExecuteError::from(err.into())
-    //     }
-    // }
+    fn task_new(
+        values: &mut [Value],
+        indexes: &[ValueIndex],
+        context: &mut Eval,
+    ) -> Result<(), ExecuteError> {
+        let closure = values[indexes[1]].load_closure(&context.space)?;
+        let mut task = Task::default();
+        task.push_frame(closure, &[], &context.asset)?;
+        values[indexes[0]] = Value::alloc_task(task, &mut context.space)?;
+        Ok(())
+    }
+
+    fn park(_: &mut [Value], _: &[ValueIndex], _: &mut Eval) -> Result<(), ExecuteError> {
+        std::thread::park();
+        Ok(())
+    }
 
     struct String {
         buf: SpaceAddr,

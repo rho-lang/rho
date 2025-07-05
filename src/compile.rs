@@ -103,7 +103,7 @@ impl Compile {
         self.block.scopes.pop();
         assert_eq!(self.block.scopes.len(), 1); // symbol table is left
         assert!(self.block.loop_jump_targets.is_empty());
-        assert!(self.block.captures.is_empty()); // should always be
+        assert!(self.block.captures.is_empty(), "{:?}", self.block.captures); // should always be
         assert!(self.block.closure_name_hint.is_empty());
         assert!(self.outer_blocks.is_empty());
 
@@ -528,9 +528,7 @@ impl Compile {
         let source = Self::try_capture_impl(id, outer_blocks, index - 1)?;
 
         let captured_index = outer_blocks[index].captures.len();
-        outer_blocks[captured_index]
-            .captures
-            .push((id.into(), source));
+        outer_blocks[index].captures.push((id.into(), source));
         Some(CaptureSource::Transitive(captured_index))
     }
 }

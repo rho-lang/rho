@@ -39,7 +39,8 @@ let push_ready = func(task) {
     push_back(ready_queue, Task, task)
 }
 
-let switch_next_ready = func() {
+let switch_next_ready = {}
+switch_next_ready = func() {
     match ready_queue.len == 0
     case False => {
         current_task = pop_front(ready_queue)
@@ -64,7 +65,7 @@ let spawn = func(f) {
 
 let sched = func(workflow) {
     spawn(func() {
-        let result = workflow(context)
+        let result = workflow()
         match result case Unit => {}
         # the entire worker ends here
     })
@@ -87,7 +88,7 @@ let wait = func(signal) {
 let notify = func(signal) {
     match signal case Signal => {}
     let l = signal.parking_queue.len
-    loop match l > 0 case False { break } case True {
+    loop match l > 0 case False => { break } case True => {
         push_ready(pop_front(signal.parking_queue))
         l = l - 1
     }

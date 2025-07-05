@@ -7,3 +7,4 @@ let park = func() {
     trace("[driver] park")
     intrinsic park
 }
+@export park
