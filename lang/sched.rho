@@ -41,9 +41,11 @@ let push_ready = func(task) {
 
 let switch_next_ready = {}
 switch_next_ready = func() {
+    trace(ready_queue)
     match ready_queue.len == 0
     case False => {
         current_task = pop_front(ready_queue)
+        trace(current_task)
         switch current_task.native
     }
     case True => {
@@ -53,22 +55,23 @@ switch_next_ready = func() {
     }
 }
 
+let num_ongoing = 0
 let spawn = func(f) {
     intrinsic task_new[native](func() {
         let result = f()
         match result case Unit => {}
-        switch_next_ready()
+        num_ongoing = num_ongoing - 1
+        match num_ongoing > 0
+            case True => switch_next_ready()
+            case False => {}  # the entire evaluation ends here
     })
     push_ready(new Task[native = native, next = {}])
+    num_ongoing = num_ongoing + 1
 }
 @export spawn
 
 let sched = func(workflow) {
-    spawn(func() {
-        let result = workflow()
-        match result case Unit => {}
-        # the entire worker ends here
-    })
+    spawn(workflow)
     switch_next_ready()
 }
 @export sched
@@ -89,6 +92,7 @@ let notify = func(signal) {
     match signal case Signal => {}
     let l = signal.parking_queue.len
     loop match l > 0 case False => { break } case True => {
+        trace("[sched] notifying")
         push_ready(pop_front(signal.parking_queue))
         l = l - 1
     }

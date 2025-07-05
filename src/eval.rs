@@ -280,8 +280,9 @@ impl Eval {
 
                     Instr::Switch(index) => {
                         let task_value = frame.values[*index];
-                        // borrow to `task` via `frame` ends here
                         task_value.ensure_type(TypeId::TASK)?;
+                        frame.instr_pointer += 1;
+                        // borrow to `task` via `frame` ends here
                         self.task_addr = task_value.addr();
                         // reborrow
                         task = unsafe { self.space.typed_get_mut::<Task>(self.task_addr) };

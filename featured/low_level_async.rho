@@ -1,0 +1,16 @@
+!input ../lang
+@import lang[trace]
+@import lang.sched[sched, spawn, create_signal, wait, notify]
+
+sched(func() {
+    trace("start")
+    let signal = create_signal()
+    spawn(func() {
+        trace("task1")
+        notify(signal)
+        trace("notified")
+    })
+    trace("spawned task1")
+    wait(signal)
+    trace("get notified")
+})
