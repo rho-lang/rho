@@ -466,7 +466,7 @@ impl Eval {
                         intrinsic(&mut frame.values, indexes, self)?
                     }
                     Instr::Unreachable(msg) => {
-                        return Err(ExecuteError::Unreachable(*msg));
+                        return Err(ExecuteError::Unreachable(msg));
                     }
                 }
 

@@ -145,7 +145,7 @@ impl Compile {
                 // this restriction can be relaxed by copying the value to somewhere "safe". if
                 // necessary can implement that later
                 // the `nth(1)` is because the 0-th scope is the symbol table
-                let Some(&value_index) = self.block.scopes.iter().nth(1).unwrap().get(&id) else {
+                let Some(&value_index) = self.block.scopes.get(1).unwrap().get(&id) else {
                     return Err(if self.var(&id).is_some() {
                         CompileError::InnerExport(id)
                     } else {

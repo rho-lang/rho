@@ -3,11 +3,8 @@ mod code;
 mod compile;
 mod eval;
 mod parse;
-// mod sched;
 mod space;
-// mod task;
 mod typing;
-// mod worker;
 
 use std::{
     collections::HashSet,

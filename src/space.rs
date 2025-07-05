@@ -61,7 +61,6 @@ impl Space {
     /// # Safety
     /// Same as `typed_get`. Additionally, caller must ensure multiple mutable
     /// references to the same `T` do not have overlapping lifetimes.
-
     // maybe bind the lifetime to `addr` would be better? probably only since it is
     // `Copy`
     pub unsafe fn typed_get_mut<'a, T>(&mut self, addr: SpaceAddr) -> &'a mut T {
