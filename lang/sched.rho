@@ -41,11 +41,9 @@ let push_ready = func(task) {
 
 let switch_next_ready = {}
 switch_next_ready = func() {
-    trace(ready_queue)
     match ready_queue.len == 0
     case False => {
         current_task = pop_front(ready_queue)
-        trace(current_task)
         switch current_task.native
     }
     case True => {
@@ -92,7 +90,6 @@ let notify = func(signal) {
     match signal case Signal => {}
     let l = signal.parking_queue.len
     loop match l > 0 case False => { break } case True => {
-        trace("[sched] notifying")
         push_ready(pop_front(signal.parking_queue))
         l = l - 1
     }

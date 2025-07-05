@@ -1,4 +1,4 @@
-use std::{slice, str, sync::Arc};
+use std::{ptr::copy_nonoverlapping, slice, str, sync::Arc};
 
 use thiserror::Error;
 
@@ -97,14 +97,17 @@ impl Closure {
 struct Task {
     frames: [Frame; 16],
     num_frame: usize,
+    values_addr: SpaceAddr,
+    values_len: usize,
+    values_cap: usize,
 }
 
 #[derive(Debug)]
 struct Frame {
     closure: Closure,
     instr_pointer: InstrIndex,
+    value_offset: usize,
     call_dst: Option<usize>,
-    values: [Value; 256],
 }
 
 impl Default for Task {
@@ -113,10 +116,13 @@ impl Default for Task {
             frames: [(); 16].map(|_| Frame {
                 closure: Closure::new(u32::MAX),
                 instr_pointer: 0,
+                value_offset: 0,
                 call_dst: None,
-                values: [Value::default(); 256],
             }),
             num_frame: 0,
+            values_addr: SpaceAddr::MAX,
+            values_len: 0,
+            values_cap: 0,
         }
     }
 }
@@ -133,24 +139,36 @@ impl Task {
         &mut self,
         closure: Closure,
         args: &[Value],
+        space: &mut Space,
         asset: &Asset,
-    ) -> Result<(), ArityError> {
+    ) -> Result<(), ExecuteError> {
         let block = asset.get_block(closure.block_id);
         if args.len() != block.num_param {
             return Err(ArityError {
                 expected: block.num_param,
                 actual: args.len(),
-            });
+            })?;
         }
-        assert!(
-            block.num_param <= 256,
-            "more than 256 frame values is not supported"
-        );
-        let mut values = [Value::default(); 256];
-        assert!(values.len() >= args.len());
-        for (dst, src) in values.iter_mut().zip(args) {
-            *dst = *src
+
+        if self.values_len + block.num_value > self.values_cap {
+            let new_cap = (self.values_len + block.num_value).max(self.values_cap * 2);
+            let new_addr = space.alloc(size_of::<Value>() * new_cap, align_of::<Value>())?;
+            if self.values_len > 0 {
+                unsafe {
+                    copy_nonoverlapping(
+                        space.typed_get::<Value>(self.values_addr),
+                        space.typed_get_mut(new_addr),
+                        self.values_len,
+                    )
+                }
+            }
+            self.values_addr = new_addr;
+            self.values_cap = new_cap;
         }
+        for (i, &arg) in args.iter().enumerate() {
+            unsafe { value_slice_store(space, self.values_addr, self.values_len + i, arg) }
+        }
+
         assert!(
             self.num_frame < 16,
             "call stack deeper than 16 frames is not supported"
@@ -158,10 +176,11 @@ impl Task {
         self.frames[self.num_frame] = Frame {
             closure,
             instr_pointer: 0,
+            value_offset: self.values_len,
             call_dst: None,
-            values,
         };
         self.num_frame += 1;
+        self.values_len += block.num_value;
         Ok(())
     }
 }
@@ -169,7 +188,6 @@ impl Task {
 impl Eval {
     pub fn new(registry: TypeRegistry, asset: Arc<Asset>) -> Self {
         Self {
-            // we currently have a >68 KB task, 1 MB space can support 15 tasks
             space: Space::new(1 << 20),
             registry,
             asset,
@@ -201,7 +219,7 @@ pub enum ExecuteError {
 impl Eval {
     pub fn run(mut self, main: Closure) -> Result<(), ExecuteError> {
         let mut task = Task::default();
-        task.push_frame(main, &[], &self.asset)?;
+        task.push_frame(main, &[], &mut self.space, &self.asset)?;
         let task_value = Value::alloc_task(task, &mut self.space)?;
         self.task_addr = task_value.addr();
         while let Err(err) = self.run_impl() {
@@ -218,9 +236,19 @@ impl Eval {
     fn run_impl(&mut self) -> Result<(), ExecuteError> {
         let asset = self.asset.clone(); // not very elegant= =
         let mut task = unsafe { self.space.typed_get_mut::<Task>(self.task_addr) };
-        let mut frame = &mut task.frames[task.num_frame - 1];
         'control: loop {
+            let frame = &mut task.frames[task.num_frame - 1];
             let block = asset.get_block(frame.closure.block_id);
+
+            // do not lift this out the loop because task.values_addr may change
+            let task_values = unsafe {
+                slice::from_raw_parts_mut(
+                    self.space.typed_get_mut::<Value>(task.values_addr),
+                    task.values_len,
+                )
+            };
+            let values = &mut task_values[frame.value_offset..];
+
             // optimize for sequentially execute instructions
             for instr in &block.instrs[frame.instr_pointer..] {
                 // invariant: instr = block.instrs[frame.instr_pointer]
@@ -235,8 +263,8 @@ impl Eval {
                         if match cond {
                             None => true,
                             Some(cond) => {
-                                let target = frame.values[cond.pattern].load_type_id()?;
-                                frame.values[cond.scrutinee].type_id() == target
+                                let target = values[cond.pattern].load_type_id()?;
+                                values[cond.scrutinee].type_id() == target
                             }
                         } {
                             frame.instr_pointer = *instr_index;
@@ -245,77 +273,72 @@ impl Eval {
                     }
 
                     Instr::Call(dst, closure, args) => {
-                        let closure_value = frame.values[*closure];
-                        let arg_values = args
-                            .iter()
-                            .map(|arg| frame.values[*arg])
-                            .collect::<Vec<_>>();
+                        let closure_value = values[*closure];
+                        let arg_values = args.iter().map(|arg| values[*arg]).collect::<Vec<_>>();
                         let replaced = frame.call_dst.replace(*dst);
                         assert!(replaced.is_none());
                         // borrow to `task` via `frame` ends here
                         task.push_frame(
                             closure_value.load_closure(&self.space)?,
                             &arg_values,
+                            &mut self.space,
                             &self.asset,
                         )?;
-                        // reborrow
-                        frame = &mut task.frames[task.num_frame - 1];
                         continue 'control;
                     }
                     Instr::Return(index) => {
-                        let return_value = frame.values[*index];
+                        let return_value = values[*index];
                         // borrow to `self` via `frame` ends here
+                        task.values_len -= block.num_value;
                         task.num_frame -= 1;
                         if task.num_frame == 0 {
                             return_value.load_unit()?; // should we make a dedicated error variant?
                             break 'control Ok(());
                         };
-                        // reborrow
-                        frame = &mut task.frames[task.num_frame - 1];
+                        let frame = &mut task.frames[task.num_frame - 1];
+                        let values = &mut task_values[frame.value_offset..];
                         let dst = frame.call_dst.take().expect("call destination must be set");
-                        frame.values[dst] = return_value;
+                        values[dst] = return_value;
                         frame.instr_pointer += 1; // current Call instruction is done
                         continue 'control;
                     }
 
                     Instr::Switch(index) => {
-                        let task_value = frame.values[*index];
+                        let task_value = values[*index];
                         task_value.ensure_type(TypeId::TASK)?;
                         frame.instr_pointer += 1;
                         // borrow to `task` via `frame` ends here
                         self.task_addr = task_value.addr();
                         // reborrow
                         task = unsafe { self.space.typed_get_mut::<Task>(self.task_addr) };
-                        frame = &mut task.frames[task.num_frame - 1];
                         continue 'control;
                     }
 
                     Instr::MakeClosure(dst, block_id) => {
                         let closure_value =
                             Value::alloc_closure(Closure::new(*block_id), &mut self.space)?;
-                        frame.values[*dst] = closure_value
+                        values[*dst] = closure_value
                     }
                     Instr::Promote(index) => {
-                        frame.values[*index] =
-                            Value::alloc_cell(frame.values[*index], &mut self.space)?
+                        values[*index] = Value::alloc_cell(values[*index], &mut self.space)?
                     }
                     Instr::Capture(dst, source) => {
                         let addr = match source {
                             CaptureSource::Original(index) => {
-                                let captured_value = frame.values[*index];
+                                let captured_value = values[*index];
                                 captured_value.ensure_type(TypeId::CELL).unwrap();
                                 captured_value.addr()
                             }
                             CaptureSource::Transitive(index) => frame.closure.captured[*index],
                         };
-                        frame.values[*dst]
+                        values[*dst]
                             .get_closure_mut(&mut self.space)
                             .unwrap()
                             .capture(addr)
                     }
                     // the 0 position corresponds to Ref layout
                     Instr::GetCaptured(dst, captured_index) => {
-                        frame.values[*dst] = unsafe {
+                        values[*dst] = unsafe {
                             value_slice_load(
                                 &self.space,
                                 frame.closure.captured[*captured_index],
@@ -328,34 +351,28 @@ impl Eval {
                             &mut self.space,
                             frame.closure.captured[*captured_index],
                             0,
-                            frame.values[*index],
+                            values[*index],
                         )
                     },
                     Instr::Demote(index) => {
-                        let value = frame.values[*index];
+                        let value = values[*index];
                         value.ensure_type(TypeId::CELL).unwrap();
-                        frame.values[*index] =
-                            unsafe { value_slice_load(&self.space, value.addr(), 0) }
+                        values[*index] = unsafe { value_slice_load(&self.space, value.addr(), 0) }
                     }
                     Instr::SetPromoted(dst, src) => {
-                        let dst_value = frame.values[*dst];
+                        let dst_value = values[*dst];
                         dst_value.ensure_type(TypeId::CELL).unwrap();
                         unsafe {
-                            value_slice_store(
-                                &mut self.space,
-                                dst_value.addr(),
-                                0,
-                                frame.values[*src],
-                            )
+                            value_slice_store(&mut self.space, dst_value.addr(), 0, values[*src])
                         }
                     }
 
                     Instr::MakeRecordType(dst, layout) => {
                         let type_id = self.registry.add_record_type(layout.clone());
-                        frame.values[*dst] = Value::new_type_id(type_id)
+                        values[*dst] = Value::new_type_id(type_id)
                     }
                     Instr::MakeRecord(dst, type_id, attrs) => {
-                        let type_id = frame.values[*type_id].load_type_id()?;
+                        let type_id = values[*type_id].load_type_id()?;
                         let Some(RecordLayout(layout)) = self.registry.get_record_layout(type_id)
                         else {
                             return Err(ExecuteError::NotRecord);
@@ -369,16 +386,15 @@ impl Eval {
                                     self.asset.get_string(*attr).into(),
                                 ));
                             };
-                            record_attrs[pos] = frame.values[*index]
+                            record_attrs[pos] = values[*index];
                         }
                         if attrs.len() != layout.len() {
                             return Err(ExecuteError::MissingAttr);
                         }
-                        frame.values[*dst] =
-                            Value::alloc_record(type_id, record_attrs, &mut self.space)?
+                        values[*dst] = Value::alloc_record(type_id, record_attrs, &mut self.space)?
                     }
                     Instr::GetAttr(dst, record, attr) => {
-                        let record_value = &frame.values[*record];
+                        let record_value = &values[*record];
                         let Some(RecordLayout(layout)) =
                             self.registry.get_record_layout(record_value.type_id())
                         else {
@@ -390,11 +406,11 @@ impl Eval {
                                 self.asset.get_string(*attr).into(),
                             ));
                         };
-                        frame.values[*dst] =
+                        values[*dst] =
                             unsafe { value_slice_load(&self.space, record_value.addr(), pos) }
                     }
                     Instr::SetAttr(record, attr, index) => {
-                        let record_value = &frame.values[*record];
+                        let record_value = &values[*record];
                         let Some(RecordLayout(layout)) =
                             self.registry.get_record_layout(record_value.type_id())
                         else {
@@ -411,17 +427,17 @@ impl Eval {
                                 &mut self.space,
                                 record_value.addr(),
                                 pos,
-                                frame.values[*index],
+                                values[*index],
                             )
                         }
                     }
 
-                    Instr::MakeUnit(dst) => frame.values[*dst] = Value::new_unit(),
+                    Instr::MakeUnit(dst) => values[*dst] = Value::new_unit(),
                     Instr::MakeString(dst, literal) => {
-                        frame.values[*dst] = Value::alloc_string(literal, &mut self.space)?
+                        values[*dst] = Value::alloc_string(literal, &mut self.space)?
                     }
                     Instr::MakeI32(dst, value) => {
-                        frame.values[*dst] = Value::new_int32(*value);
+                        values[*dst] = Value::new_int32(*value);
                     }
 
                     Instr::Op2(dst, op, a, b) => {
@@ -437,8 +453,8 @@ impl Eval {
                             | Op2::Gt
                             | Op2::Le
                             | Op2::Ge => {
-                                let a = frame.values[*a].load_int32()?;
-                                let b = frame.values[*b].load_int32()?;
+                                let a = values[*a].load_int32()?;
+                                let b = values[*b].load_int32()?;
                                 match op {
                                     Op2::Add => Value::new_int32(a + b),
                                     Op2::Sub => Value::new_int32(a - b),
@@ -455,16 +471,14 @@ impl Eval {
                                 }
                             }
                         };
-                        frame.values[*dst] = dst_value
+                        values[*dst] = dst_value
                     }
 
                     Instr::Copy(dst, src) => {
-                        let src_value = frame.values[*src];
-                        frame.values[*dst] = src_value
+                        let src_value = values[*src];
+                        values[*dst] = src_value
                     }
-                    Instr::Intrinsic(intrinsic, indexes) => {
-                        intrinsic(&mut frame.values, indexes, self)?
-                    }
+                    Instr::Intrinsic(intrinsic, indexes) => intrinsic(values, indexes, self)?,
                     Instr::Unreachable(msg) => {
                         return Err(ExecuteError::Unreachable(msg));
                     }
@@ -673,7 +687,7 @@ pub mod intrinsics {
     ) -> Result<(), ExecuteError> {
         let closure = values[indexes[1]].load_closure(&context.space)?;
         let mut task = Task::default();
-        task.push_frame(closure, &[], &context.asset)?;
+        task.push_frame(closure, &[], &mut context.space, &context.asset)?;
         values[indexes[0]] = Value::alloc_task(task, &mut context.space)?;
         Ok(())
     }

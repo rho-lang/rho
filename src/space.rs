@@ -77,3 +77,9 @@ impl Space {
         unsafe { addr.write(value) }
     }
 }
+
+impl Drop for Space {
+    fn drop(&mut self) {
+        tracing::debug!("on exit: {} bytes allocated", self.alloc_addr)
+    }
+}
