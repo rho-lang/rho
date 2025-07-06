@@ -43,6 +43,20 @@ impl Space {
         }
     }
 
+    pub unsafe fn alloc_copy<T: Default + Copy>(
+        &mut self,
+        new_cap: usize,
+        SpaceAddr(src_values): SpaceAddr,
+        len: usize,
+    ) -> Result<SpaceAddr, OutOfSpace> {
+        let new_values = self.bump.alloc_slice_fill_default::<T>(new_cap);
+        if len > 0 {
+            let src_values = unsafe { slice::from_raw_parts(src_values.cast().as_ptr(), len) };
+            new_values[..len].copy_from_slice(src_values)
+        }
+        Ok(SpaceAddr(NonNull::from(new_values).cast()))
+    }
+
     #[allow(unused)]
     pub fn copy_collect(&mut self, OutOfSpace(requested_size): OutOfSpace, addr: SpaceAddr) {
         todo!()
