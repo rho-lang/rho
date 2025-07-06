@@ -1,19 +1,33 @@
+use std::{alloc::Layout, ptr::NonNull, slice};
+
+use bumpalo::{AllocErr, Bump};
 use thiserror::Error;
 
 #[derive(Default)]
 pub struct Space {
-    buf: Vec<u8>,
-    alloc_addr: SpaceAddr,
+    bump: Bump<8>,
 }
 
-pub type SpaceAddr = usize;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpaceAddr(pub NonNull<u8>);
+
+impl Default for SpaceAddr {
+    fn default() -> Self {
+        Self(NonNull::dangling())
+    }
+}
+
+impl SpaceAddr {
+    pub unsafe fn add(self, count: usize) -> Self {
+        Self(unsafe { self.0.add(count) })
+    }
+}
 
 impl Space {
-    pub fn new(buf_size: usize) -> Self {
-        Self {
-            buf: vec![0; buf_size],
-            alloc_addr: 0,
-        }
+    pub fn new(limit: impl Into<Option<usize>>) -> Self {
+        let bump = Bump::<8>::with_min_align();
+        bump.set_allocation_limit(limit.into());
+        Self { bump }
     }
 }
 
@@ -22,13 +36,11 @@ impl Space {
 pub struct OutOfSpace(pub usize);
 
 impl Space {
-    pub fn alloc(&mut self, size: usize, align: usize) -> Result<SpaceAddr, OutOfSpace> {
-        let addr = self.alloc_addr + (&self.buf[self.alloc_addr] as *const u8).align_offset(align);
-        if addr + size > self.buf.len() {
-            return Err(OutOfSpace(size));
+    pub fn alloc(&mut self, layout: Layout) -> Result<SpaceAddr, OutOfSpace> {
+        match self.bump.try_alloc_layout(layout) {
+            Ok(addr) => Ok(SpaceAddr(addr)),
+            Err(AllocErr) => Err(OutOfSpace(layout.size())),
         }
-        self.alloc_addr = addr + size;
-        Ok(addr)
     }
 
     #[allow(unused)]
@@ -36,25 +48,32 @@ impl Space {
         todo!()
     }
 
-    pub fn get(&self, addr: SpaceAddr, size: usize) -> &[u8] {
-        assert!(addr + size <= self.alloc_addr);
-        &self.buf[addr..addr + size]
-    }
-
-    pub fn get_mut(&mut self, addr: SpaceAddr, size: usize) -> &mut [u8] {
-        assert!(addr + size <= self.alloc_addr);
-        &mut self.buf[addr..addr + size]
-    }
-
-    pub fn typed_alloc<T>(&mut self) -> Result<SpaceAddr, OutOfSpace> {
-        self.alloc(size_of::<T>(), align_of::<T>())
+    /// # Safety
+    /// * `addr` must be obtained by calling `alloc` with a layout whose size is
+    /// `size`.
+    /// * `addr` must be reachable from every previous root `addr` of `copy_collect`
+    /// calls
+    pub unsafe fn get(&self, SpaceAddr(addr): SpaceAddr, size: usize) -> &[u8] {
+        unsafe { slice::from_raw_parts(addr.as_ptr(), size) }
     }
 
     /// # Safety
-    /// The caller must ensure `addr` contains a `T` instance, e.g., was
-    /// `typed_alloc::<T>`ed
+    /// Same as `get`.
+    pub unsafe fn get_mut(&mut self, SpaceAddr(addr): SpaceAddr, size: usize) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(addr.as_ptr(), size) }
+    }
+
+    pub fn typed_alloc<T>(&mut self) -> Result<SpaceAddr, OutOfSpace> {
+        self.alloc(Layout::new::<T>())
+    }
+
+    /// # Safety
+    /// Same as `get`, plus the caller must ensure `addr` contains a `T` instance,
+    /// e.g., was `typed_alloc::<T>`ed
     pub unsafe fn typed_get<T>(&self, addr: SpaceAddr) -> &T {
-        let addr = self.get(addr, size_of::<T>()).as_ptr().cast::<T>();
+        let addr = unsafe { self.get(addr, size_of::<T>()) }
+            .as_ptr()
+            .cast::<T>();
         assert!(addr.is_aligned());
         unsafe { &*addr }
     }
@@ -62,7 +81,9 @@ impl Space {
     /// # Safety
     /// Same as `typed_get`.
     pub unsafe fn typed_get_mut<T>(&mut self, addr: SpaceAddr) -> &mut T {
-        let addr = self.get_mut(addr, size_of::<T>()).as_mut_ptr().cast::<T>();
+        let addr = unsafe { self.get_mut(addr, size_of::<T>()) }
+            .as_mut_ptr()
+            .cast::<T>();
         assert!(addr.is_aligned());
         unsafe { &mut *addr }
     }
@@ -70,7 +91,9 @@ impl Space {
     /// # Safety
     /// Same as `typed_get`.
     pub unsafe fn typed_write<T>(&mut self, addr: SpaceAddr, value: T) {
-        let addr = self.get_mut(addr, size_of::<T>()).as_mut_ptr().cast::<T>();
+        let addr = unsafe { self.get_mut(addr, size_of::<T>()) }
+            .as_mut_ptr()
+            .cast::<T>();
         assert!(addr.is_aligned());
         unsafe { addr.write(value) }
     }
@@ -78,6 +101,6 @@ impl Space {
 
 impl Drop for Space {
     fn drop(&mut self) {
-        tracing::debug!("on exit: {} bytes allocated", self.alloc_addr)
+        tracing::debug!("on exit: {} bytes allocated", self.bump.allocated_bytes())
     }
 }

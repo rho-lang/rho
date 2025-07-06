@@ -1,3 +1,4 @@
+bumpalo
 copy_nonoverlapping
 Deque
 humantime

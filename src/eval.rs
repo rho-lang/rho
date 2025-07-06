@@ -1,4 +1,4 @@
-use std::{mem::take, ptr::copy_nonoverlapping, slice, str};
+use std::{alloc::Layout, mem::take, ptr::copy_nonoverlapping, str};
 
 use thiserror::Error;
 
@@ -24,7 +24,14 @@ const _: () = assert!(align_of::<SpaceAddr>() == align_of::<usize>());
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
     type_id: TypeId,
-    data: u64, // embedded data for inline types, SpaceAddr pointing to actual data for others
+    data: ValueData,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ValueData {
+    Nothing,
+    Inline(u64),
+    Addr(SpaceAddr),
 }
 
 // helpers to maintain compatibility after the optimization is applied
@@ -32,16 +39,22 @@ impl Value {
     fn new(type_id: TypeId, addr: SpaceAddr) -> Self {
         Self {
             type_id,
-            data: addr as _,
+            data: ValueData::Addr(addr),
         }
     }
 
     fn new_inline(type_id: TypeId, data: u64) -> Self {
-        Self { type_id, data }
+        Self {
+            type_id,
+            data: ValueData::Inline(data),
+        }
     }
 
     fn new_atom(type_id: TypeId) -> Self {
-        Self::new_inline(type_id, u64::MAX)
+        Self {
+            type_id,
+            data: ValueData::Nothing,
+        }
     }
 
     fn type_id(&self) -> TypeId {
@@ -49,11 +62,19 @@ impl Value {
     }
 
     fn data(&self) -> u64 {
-        self.data
+        if let ValueData::Inline(data) = self.data {
+            data
+        } else {
+            unimplemented!("data is not inline");
+        }
     }
 
     fn addr(&self) -> SpaceAddr {
-        self.data as _
+        if let ValueData::Addr(addr) = self.data {
+            addr
+        } else {
+            unimplemented!("data is not an address");
+        }
     }
 }
 
@@ -77,7 +98,7 @@ impl Closure {
     pub fn new(block_id: BlockId) -> Self {
         Self {
             block_id,
-            captured: [SpaceAddr::MAX; 16],
+            captured: [Default::default(); 16],
             num_captured: 0,
         }
     }
@@ -117,7 +138,7 @@ impl Default for Task {
                 value_offset: 0,
             }),
             num_frame: 0,
-            values_addr: SpaceAddr::MAX,
+            values_addr: Default::default(),
             values_len: 0,
             values_cap: 0,
         }
@@ -128,16 +149,16 @@ impl Default for Task {
 pub struct ValuesView(SpaceAddr);
 
 impl ValuesView {
-    fn offset(self, offset: usize) -> Self {
-        Self(self.0 + offset * size_of::<Value>())
+    unsafe fn offset(self, offset: usize) -> Self {
+        Self(unsafe { self.0.add(offset * size_of::<Value>()) })
     }
 
     unsafe fn load(&self, index: usize, space: &Space) -> Value {
-        *unsafe { space.typed_get(self.0 + index * size_of::<Value>()) }
+        *unsafe { space.typed_get(self.0.add(index * size_of::<Value>())) }
     }
 
     unsafe fn store(&self, index: usize, value: Value, space: &mut Space) {
-        unsafe { space.typed_write(self.0 + index * size_of::<Value>(), value) }
+        unsafe { space.typed_write(self.0.add(index * size_of::<Value>()), value) }
     }
 }
 
@@ -164,7 +185,7 @@ impl TaskView {
 
     unsafe fn frame_values(&self, space: &Space) -> ValuesView {
         let task = unsafe { self.get(space) };
-        ValuesView(task.values_addr).offset(task.frames[task.num_frame - 1].value_offset)
+        unsafe { ValuesView(task.values_addr).offset(task.frames[task.num_frame - 1].value_offset) }
     }
 }
 
@@ -201,7 +222,7 @@ impl TaskView {
         let values_len = task.values_len;
         if values_len + block.num_value > task.values_cap {
             let new_cap = (values_len + block.num_value).max(task.values_cap * 2);
-            let new_values_addr = space.alloc(size_of::<Value>() * new_cap, align_of::<Value>())?;
+            let new_values_addr = space.alloc(Layout::array::<Value>(new_cap).unwrap())?;
             if values_len > 0 {
                 unsafe {
                     copy_nonoverlapping(
@@ -234,9 +255,9 @@ impl TaskView {
 impl Eval {
     pub fn new(registry: TypeRegistry) -> Self {
         Self {
-            space: Space::new(1 << 20),
+            space: Space::new(None),
             registry,
-            task_addr: SpaceAddr::MAX,
+            task_addr: Default::default(),
         }
     }
 }
@@ -439,7 +460,9 @@ impl Eval {
                             else {
                                 return Err(ExecuteError::NotRecord);
                             };
-                            let mut record_attrs = vec![Value::default(); layout.len()];
+                            let record_value =
+                                Value::alloc_record(type_id, layout.len(), &mut self.space)?;
+                            let attr_values = ValuesView(record_value.addr());
                             for (attr, index) in attrs {
                                 let Some(pos) =
                                     layout.iter().position(|layout_attr| layout_attr == attr)
@@ -448,14 +471,12 @@ impl Eval {
                                         asset.get_string(*attr).into(),
                                     ));
                                 };
-                                record_attrs[pos] =
-                                    unsafe { frame_values.load(*index, &self.space) };
+                                let value = unsafe { frame_values.load(*index, &self.space) };
+                                unsafe { attr_values.store(pos, value, &mut self.space) }
                             }
                             if attrs.len() != layout.len() {
                                 return Err(ExecuteError::MissingAttr);
                             }
-                            let record_value =
-                                Value::alloc_record(type_id, record_attrs, &mut self.space)?;
                             unsafe { frame_values.store(*dst, record_value, &mut self.space) }
                         }
                         Instr::GetAttr(dst, record, attr) => {
@@ -688,24 +709,19 @@ impl Value {
     // record types
     fn alloc_record(
         type_id: TypeId,
-        attrs: Vec<Value>,
+        num_attr: usize,
         space: &mut Space,
     ) -> Result<Self, OutOfSpace> {
-        let addr = space.alloc(size_of::<Value>() * attrs.len(), align_of::<Value>())?;
-        let buf = space
-            .get_mut(addr, size_of::<Value>() * attrs.len())
-            .as_mut_ptr()
-            .cast::<Value>();
-        let record_attrs = unsafe { slice::from_raw_parts_mut(buf, attrs.len()) };
-        for (dst, src) in record_attrs.iter_mut().zip(attrs) {
-            *dst = src
-        }
+        let addr = space.alloc(Layout::array::<Value>(num_attr).unwrap())?;
         Ok(Self::new(type_id, addr))
     }
 }
 
 pub mod intrinsics {
-    use std::ptr::{copy, copy_nonoverlapping};
+    use std::{
+        alloc::Layout,
+        ptr::{copy, copy_nonoverlapping},
+    };
 
     use thiserror::Error;
 
@@ -774,8 +790,8 @@ pub mod intrinsics {
             let len = literal.len();
             // allocate buffer first, otherwise if buffer fails to allocate while String
             // itself succeeds, marking String would encounter invalid SpaceAddr
-            let buf = space.alloc(len, 1)?;
-            space.get_mut(buf, len).copy_from_slice(literal.as_bytes());
+            let buf = space.alloc(Layout::from_size_align(len, 1).unwrap())?;
+            unsafe { space.get_mut(buf, len) }.copy_from_slice(literal.as_bytes());
             let addr = space.typed_alloc::<String>()?;
             unsafe { space.typed_write(addr, String { buf, len }) }
             Ok(Self::new(TypeId::STRING, addr))
@@ -894,7 +910,7 @@ pub mod intrinsics {
 
     impl Value {
         fn alloc_list(cap: usize, space: &mut Space) -> Result<Self, OutOfSpace> {
-            let buf = space.alloc(size_of::<Value>() * cap, align_of::<Value>())?;
+            let buf = space.alloc(Layout::array::<Value>(cap).unwrap())?;
             let addr = space.typed_alloc::<List>()?;
             unsafe { space.typed_write(addr, List { buf, len: 0, cap }) }
             Ok(Self::new(TypeId::LIST, addr))
@@ -1055,10 +1071,10 @@ pub mod intrinsics {
             copy(
                 context
                     .space
-                    .typed_get::<Value>(list.buf + src * size_of::<Value>()),
+                    .typed_get::<Value>(list.buf.add(src * size_of::<Value>())),
                 context
                     .space
-                    .typed_get_mut(list.buf + dst * size_of::<Value>()),
+                    .typed_get_mut(list.buf.add(dst * size_of::<Value>())),
                 len,
             );
         }
