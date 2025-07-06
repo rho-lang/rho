@@ -107,7 +107,6 @@ struct Frame {
     closure: Closure,
     instr_pointer: InstrIndex,
     value_offset: usize,
-    call_dst: Option<usize>,
 }
 
 impl Default for Task {
@@ -117,7 +116,6 @@ impl Default for Task {
                 closure: Closure::new(u32::MAX),
                 instr_pointer: 0,
                 value_offset: 0,
-                call_dst: None,
             }),
             num_frame: 0,
             values_addr: SpaceAddr::MAX,
@@ -177,7 +175,6 @@ impl Task {
             closure,
             instr_pointer: 0,
             value_offset: self.values_len,
-            call_dst: None,
         };
         self.num_frame += 1;
         self.values_len += block.num_value;
@@ -251,7 +248,9 @@ impl Eval {
             let values = &mut task_values[frame.value_offset..];
 
             if let Some(value) = take(&mut return_epilogue) {
-                let dst = frame.call_dst.take().expect("call destination must be set");
+                let &Instr::Call(dst, ..) = &block.instrs[frame.instr_pointer] else {
+                    unreachable!()
+                };
                 values[dst] = value;
                 frame.instr_pointer += 1 // current Call instruction is done
             }
@@ -280,12 +279,10 @@ impl Eval {
                             }
                         }
 
-                        Instr::Call(dst, closure, args) => {
+                        Instr::Call(_, closure, args) => {
                             let closure_value = values[*closure];
                             let arg_values =
                                 args.iter().map(|arg| values[*arg]).collect::<Vec<_>>();
-                            let replaced = frame.call_dst.replace(*dst);
-                            assert!(replaced.is_none());
                             task.push_frame(
                                 closure_value.load_closure(&self.space)?,
                                 &arg_values,
