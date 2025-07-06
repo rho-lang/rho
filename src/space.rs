@@ -31,6 +31,7 @@ impl Space {
         Ok(addr)
     }
 
+    #[allow(unused)]
     pub fn copy_collect(&mut self, OutOfSpace(requested_size): OutOfSpace, addr: SpaceAddr) {
         todo!()
     }

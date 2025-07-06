@@ -73,6 +73,11 @@ impl TypeRegistry {
     pub fn preload(&mut self, _asset: &mut Asset) {
         self.record_layouts = [
             // do we need to insert layouts for zero sized record types?
+            // these two are required (for now) because `new True` is the most complicated
+            // way i can accept for boolean literal (rather than `1 == 1`)
+            (TypeId::TRUE, RecordLayout(vec![])),
+            (TypeId::FALSE, RecordLayout(vec![])),
+            // what about this?
             (TypeId::UNIT, RecordLayout(vec![])),
         ]
         .into()

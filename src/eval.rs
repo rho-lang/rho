@@ -731,9 +731,10 @@ pub mod intrinsics {
 
         fn format_value(
             value: Value,
+            top: bool,
             space: &Space,
             registry: &TypeRegistry,
-            top: bool,
+            asset: &Asset,
         ) -> std::string::String {
             if let Ok(message) = value.get_str(space) {
                 message.into()
@@ -746,11 +747,10 @@ pub mod intrinsics {
                         .enumerate()
                         .map(|(i, &attr)| {
                             let attr_value = unsafe { value_slice_load(space, value.addr(), i) };
-                            // TODO get interned string
                             format!(
                                 "{} = {}",
-                                attr,
-                                format_value(attr_value, space, registry, false)
+                                asset.get_string(attr),
+                                format_value(attr_value, false, space, registry, asset)
                             )
                         })
                         .collect::<Vec<_>>()
@@ -764,7 +764,16 @@ pub mod intrinsics {
             }
         }
 
-        tracing::info!(value = format_value(value, &context.space, &context.registry, true));
+        tracing::info!(
+            "{}",
+            format_value(
+                value,
+                true,
+                &context.space,
+                &context.registry,
+                &context.asset
+            )
+        );
         Ok(())
     }
 
