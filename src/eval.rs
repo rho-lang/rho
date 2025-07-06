@@ -1,4 +1,4 @@
-use std::{ptr::copy_nonoverlapping, slice, str, sync::Arc};
+use std::{mem::take, ptr::copy_nonoverlapping, slice, str, sync::Arc};
 
 use thiserror::Error;
 
@@ -232,15 +232,16 @@ impl Eval {
         }
         Ok(())
     }
+}
 
+impl Eval {
     fn run_impl(&mut self) -> Result<(), ExecuteError> {
         let asset = self.asset.clone(); // not very elegant= =
-        let mut task = unsafe { self.space.typed_get_mut::<Task>(self.task_addr) };
-        'control: loop {
+        let mut return_epilogue = None;
+        'nonlocal_control: loop {
+            let task = unsafe { self.space.typed_get_mut::<Task>(self.task_addr) };
             let frame = &mut task.frames[task.num_frame - 1];
             let block = asset.get_block(frame.closure.block_id);
-
-            // do not lift this out the loop because task.values_addr may change
             let task_values = unsafe {
                 slice::from_raw_parts_mut(
                     self.space.typed_get_mut::<Value>(task.values_addr),
@@ -249,136 +250,166 @@ impl Eval {
             };
             let values = &mut task_values[frame.value_offset..];
 
-            // optimize for sequentially execute instructions
-            for instr in &block.instrs[frame.instr_pointer..] {
-                // invariant: instr = block.instrs[frame.instr_pointer]
-                // at the end of this loop, instr_pointer is incremented to maintain this
-                // invariant. the increment is at the end for re-executing failed instructions
-                // in recoverable cases like OutOfSpace. also, every adjustment of instr_pointer
-                // (for control flow) is followed by a `break` or `continue` of the outer
-                // `'control`
-                tracing::trace!(%frame.instr_pointer, %block.name, ?instr, "execute");
-                match instr {
-                    Instr::Jump(instr_index, cond) => {
-                        if match cond {
-                            None => true,
-                            Some(cond) => {
-                                let target = values[cond.pattern].load_type_id()?;
-                                values[cond.scrutinee].type_id() == target
+            if let Some(value) = take(&mut return_epilogue) {
+                let dst = frame.call_dst.take().expect("call destination must be set");
+                values[dst] = value;
+                frame.instr_pointer += 1 // current Call instruction is done
+            }
+
+            'local_control: loop {
+                // optimize for sequentially execute instructions
+                for instr in &block.instrs[frame.instr_pointer..] {
+                    // invariant: instr = block.instrs[frame.instr_pointer]
+                    // at the end of this loop, instr_pointer is incremented to maintain this
+                    // invariant. the increment is at the end for re-executing failed instructions
+                    // in recoverable cases like OutOfSpace. also, every adjustment of instr_pointer
+                    // (for control flow) is followed by a `break` or `continue` of the outer
+                    // 'local_control
+                    tracing::trace!(%frame.instr_pointer, %block.name, ?instr, "execute");
+                    match instr {
+                        Instr::Jump(instr_index, cond) => {
+                            if match cond {
+                                None => true,
+                                Some(cond) => {
+                                    let target = values[cond.pattern].load_type_id()?;
+                                    values[cond.scrutinee].type_id() == target
+                                }
+                            } {
+                                frame.instr_pointer = *instr_index;
+                                continue 'local_control;
                             }
-                        } {
-                            frame.instr_pointer = *instr_index;
-                            continue 'control;
                         }
-                    }
 
-                    Instr::Call(dst, closure, args) => {
-                        let closure_value = values[*closure];
-                        let arg_values = args.iter().map(|arg| values[*arg]).collect::<Vec<_>>();
-                        let replaced = frame.call_dst.replace(*dst);
-                        assert!(replaced.is_none());
-                        // borrow to `task` via `frame` ends here
-                        task.push_frame(
-                            closure_value.load_closure(&self.space)?,
-                            &arg_values,
-                            &mut self.space,
-                            &self.asset,
-                        )?;
-                        continue 'control;
-                    }
-                    Instr::Return(index) => {
-                        let return_value = values[*index];
-                        // borrow to `self` via `frame` ends here
-                        task.values_len -= block.num_value;
-                        task.num_frame -= 1;
-                        if task.num_frame == 0 {
-                            return_value.load_unit()?; // should we make a dedicated error variant?
-                            break 'control Ok(());
-                        };
-                        let frame = &mut task.frames[task.num_frame - 1];
-                        let values = &mut task_values[frame.value_offset..];
-                        let dst = frame.call_dst.take().expect("call destination must be set");
-                        values[dst] = return_value;
-                        frame.instr_pointer += 1; // current Call instruction is done
-                        continue 'control;
-                    }
-
-                    Instr::Switch(index) => {
-                        let task_value = values[*index];
-                        task_value.ensure_type(TypeId::TASK)?;
-                        frame.instr_pointer += 1;
-                        // borrow to `task` via `frame` ends here
-                        self.task_addr = task_value.addr();
-                        // reborrow
-                        task = unsafe { self.space.typed_get_mut::<Task>(self.task_addr) };
-                        continue 'control;
-                    }
-
-                    Instr::MakeClosure(dst, block_id) => {
-                        let closure_value =
-                            Value::alloc_closure(Closure::new(*block_id), &mut self.space)?;
-                        values[*dst] = closure_value
-                    }
-                    Instr::Promote(index) => {
-                        values[*index] = Value::alloc_cell(values[*index], &mut self.space)?
-                    }
-                    Instr::Capture(dst, source) => {
-                        let addr = match source {
-                            CaptureSource::Original(index) => {
-                                let captured_value = values[*index];
-                                captured_value.ensure_type(TypeId::CELL).unwrap();
-                                captured_value.addr()
+                        Instr::Call(dst, closure, args) => {
+                            let closure_value = values[*closure];
+                            let arg_values =
+                                args.iter().map(|arg| values[*arg]).collect::<Vec<_>>();
+                            let replaced = frame.call_dst.replace(*dst);
+                            assert!(replaced.is_none());
+                            task.push_frame(
+                                closure_value.load_closure(&self.space)?,
+                                &arg_values,
+                                &mut self.space,
+                                &self.asset,
+                            )?;
+                            continue 'nonlocal_control;
+                        }
+                        Instr::Return(index) => {
+                            let return_value = values[*index];
+                            task.values_len -= block.num_value;
+                            task.num_frame -= 1;
+                            if task.num_frame == 0 {
+                                return_value.load_unit()?; // should we make a dedicated error variant?
+                                break 'nonlocal_control Ok(());
                             }
-                            CaptureSource::Transitive(index) => frame.closure.captured[*index],
-                        };
-                        values[*dst]
-                            .get_closure_mut(&mut self.space)
-                            .unwrap()
-                            .capture(addr)
-                    }
-                    // the 0 position corresponds to Ref layout
-                    Instr::GetCaptured(dst, captured_index) => {
-                        values[*dst] = unsafe {
-                            value_slice_load(
-                                &self.space,
+                            let replaced = return_epilogue.replace(return_value);
+                            assert!(replaced.is_none());
+                            continue 'nonlocal_control;
+                        }
+
+                        Instr::Switch(index) => {
+                            let task_value = values[*index];
+                            task_value.ensure_type(TypeId::TASK)?;
+                            // after switching back (if any), current Switch instruction is done
+                            frame.instr_pointer += 1;
+                            self.task_addr = task_value.addr();
+                            continue 'nonlocal_control;
+                        }
+
+                        Instr::MakeClosure(dst, block_id) => {
+                            let closure_value =
+                                Value::alloc_closure(Closure::new(*block_id), &mut self.space)?;
+                            values[*dst] = closure_value
+                        }
+                        Instr::Promote(index) => {
+                            values[*index] = Value::alloc_cell(values[*index], &mut self.space)?
+                        }
+                        Instr::Capture(dst, source) => {
+                            let addr = match source {
+                                CaptureSource::Original(index) => {
+                                    let captured_value = values[*index];
+                                    captured_value.ensure_type(TypeId::CELL).unwrap();
+                                    captured_value.addr()
+                                }
+                                CaptureSource::Transitive(index) => frame.closure.captured[*index],
+                            };
+                            values[*dst]
+                                .get_closure_mut(&mut self.space)
+                                .unwrap()
+                                .capture(addr)
+                        }
+                        // the 0 position corresponds to Ref layout
+                        Instr::GetCaptured(dst, captured_index) => {
+                            values[*dst] = unsafe {
+                                value_slice_load(
+                                    &self.space,
+                                    frame.closure.captured[*captured_index],
+                                    0,
+                                )
+                            }
+                        }
+                        Instr::SetCaptured(captured_index, index) => unsafe {
+                            value_slice_store(
+                                &mut self.space,
                                 frame.closure.captured[*captured_index],
                                 0,
+                                values[*index],
                             )
+                        },
+                        Instr::Demote(index) => {
+                            let value = values[*index];
+                            value.ensure_type(TypeId::CELL).unwrap();
+                            values[*index] =
+                                unsafe { value_slice_load(&self.space, value.addr(), 0) }
                         }
-                    }
-                    Instr::SetCaptured(captured_index, index) => unsafe {
-                        value_slice_store(
-                            &mut self.space,
-                            frame.closure.captured[*captured_index],
-                            0,
-                            values[*index],
-                        )
-                    },
-                    Instr::Demote(index) => {
-                        let value = values[*index];
-                        value.ensure_type(TypeId::CELL).unwrap();
-                        values[*index] = unsafe { value_slice_load(&self.space, value.addr(), 0) }
-                    }
-                    Instr::SetPromoted(dst, src) => {
-                        let dst_value = values[*dst];
-                        dst_value.ensure_type(TypeId::CELL).unwrap();
-                        unsafe {
-                            value_slice_store(&mut self.space, dst_value.addr(), 0, values[*src])
+                        Instr::SetPromoted(dst, src) => {
+                            let dst_value = values[*dst];
+                            dst_value.ensure_type(TypeId::CELL).unwrap();
+                            unsafe {
+                                value_slice_store(
+                                    &mut self.space,
+                                    dst_value.addr(),
+                                    0,
+                                    values[*src],
+                                )
+                            }
                         }
-                    }
 
-                    Instr::MakeRecordType(dst, layout) => {
-                        let type_id = self.registry.add_record_type(layout.clone());
-                        values[*dst] = Value::new_type_id(type_id)
-                    }
-                    Instr::MakeRecord(dst, type_id, attrs) => {
-                        let type_id = values[*type_id].load_type_id()?;
-                        let Some(RecordLayout(layout)) = self.registry.get_record_layout(type_id)
-                        else {
-                            return Err(ExecuteError::NotRecord);
-                        };
-                        let mut record_attrs = vec![Value::default(); layout.len()];
-                        for (attr, index) in attrs {
+                        Instr::MakeRecordType(dst, layout) => {
+                            let type_id = self.registry.add_record_type(layout.clone());
+                            values[*dst] = Value::new_type_id(type_id)
+                        }
+                        Instr::MakeRecord(dst, type_id, attrs) => {
+                            let type_id = values[*type_id].load_type_id()?;
+                            let Some(RecordLayout(layout)) =
+                                self.registry.get_record_layout(type_id)
+                            else {
+                                return Err(ExecuteError::NotRecord);
+                            };
+                            let mut record_attrs = vec![Value::default(); layout.len()];
+                            for (attr, index) in attrs {
+                                let Some(pos) =
+                                    layout.iter().position(|layout_attr| layout_attr == attr)
+                                else {
+                                    return Err(ExecuteError::UnexpectedAttr(
+                                        self.asset.get_string(*attr).into(),
+                                    ));
+                                };
+                                record_attrs[pos] = values[*index];
+                            }
+                            if attrs.len() != layout.len() {
+                                return Err(ExecuteError::MissingAttr);
+                            }
+                            values[*dst] =
+                                Value::alloc_record(type_id, record_attrs, &mut self.space)?
+                        }
+                        Instr::GetAttr(dst, record, attr) => {
+                            let record_value = &values[*record];
+                            let Some(RecordLayout(layout)) =
+                                self.registry.get_record_layout(record_value.type_id())
+                            else {
+                                return Err(ExecuteError::NotRecord);
+                            };
                             let Some(pos) =
                                 layout.iter().position(|layout_attr| layout_attr == attr)
                             else {
@@ -386,107 +417,89 @@ impl Eval {
                                     self.asset.get_string(*attr).into(),
                                 ));
                             };
-                            record_attrs[pos] = values[*index];
+                            values[*dst] =
+                                unsafe { value_slice_load(&self.space, record_value.addr(), pos) }
                         }
-                        if attrs.len() != layout.len() {
-                            return Err(ExecuteError::MissingAttr);
-                        }
-                        values[*dst] = Value::alloc_record(type_id, record_attrs, &mut self.space)?
-                    }
-                    Instr::GetAttr(dst, record, attr) => {
-                        let record_value = &values[*record];
-                        let Some(RecordLayout(layout)) =
-                            self.registry.get_record_layout(record_value.type_id())
-                        else {
-                            return Err(ExecuteError::NotRecord);
-                        };
-                        let Some(pos) = layout.iter().position(|layout_attr| layout_attr == attr)
-                        else {
-                            return Err(ExecuteError::UnexpectedAttr(
-                                self.asset.get_string(*attr).into(),
-                            ));
-                        };
-                        values[*dst] =
-                            unsafe { value_slice_load(&self.space, record_value.addr(), pos) }
-                    }
-                    Instr::SetAttr(record, attr, index) => {
-                        let record_value = &values[*record];
-                        let Some(RecordLayout(layout)) =
-                            self.registry.get_record_layout(record_value.type_id())
-                        else {
-                            return Err(ExecuteError::NotRecord);
-                        };
-                        let Some(pos) = layout.iter().position(|layout_attr| layout_attr == attr)
-                        else {
-                            return Err(ExecuteError::UnexpectedAttr(
-                                self.asset.get_string(*attr).into(),
-                            ));
-                        };
-                        unsafe {
-                            value_slice_store(
-                                &mut self.space,
-                                record_value.addr(),
-                                pos,
-                                values[*index],
-                            )
-                        }
-                    }
-
-                    Instr::MakeUnit(dst) => values[*dst] = Value::new_unit(),
-                    Instr::MakeString(dst, literal) => {
-                        values[*dst] = Value::alloc_string(literal, &mut self.space)?
-                    }
-                    Instr::MakeI32(dst, value) => {
-                        values[*dst] = Value::new_int32(*value);
-                    }
-
-                    Instr::Op2(dst, op, a, b) => {
-                        let dst_value = match op {
-                            Op2::Add
-                            | Op2::Sub
-                            | Op2::Eq
-                            | Op2::Ne
-                            | Op2::Mul
-                            | Op2::Div
-                            | Op2::Rem
-                            | Op2::Lt
-                            | Op2::Gt
-                            | Op2::Le
-                            | Op2::Ge => {
-                                let a = values[*a].load_int32()?;
-                                let b = values[*b].load_int32()?;
-                                match op {
-                                    Op2::Add => Value::new_int32(a + b),
-                                    Op2::Sub => Value::new_int32(a - b),
-                                    Op2::Eq => Value::new_bool(a == b),
-                                    Op2::Ne => Value::new_bool(a != b),
-                                    Op2::Mul => Value::new_int32(a * b),
-                                    Op2::Div => Value::new_int32(a / b),
-                                    Op2::Rem => Value::new_int32(a % b),
-                                    Op2::Lt => Value::new_bool(a < b),
-                                    Op2::Gt => Value::new_bool(a > b),
-                                    Op2::Le => Value::new_bool(a <= b),
-                                    Op2::Ge => Value::new_bool(a >= b),
-                                    // _ => unreachable!(),
-                                }
+                        Instr::SetAttr(record, attr, index) => {
+                            let record_value = &values[*record];
+                            let Some(RecordLayout(layout)) =
+                                self.registry.get_record_layout(record_value.type_id())
+                            else {
+                                return Err(ExecuteError::NotRecord);
+                            };
+                            let Some(pos) =
+                                layout.iter().position(|layout_attr| layout_attr == attr)
+                            else {
+                                return Err(ExecuteError::UnexpectedAttr(
+                                    self.asset.get_string(*attr).into(),
+                                ));
+                            };
+                            unsafe {
+                                value_slice_store(
+                                    &mut self.space,
+                                    record_value.addr(),
+                                    pos,
+                                    values[*index],
+                                )
                             }
-                        };
-                        values[*dst] = dst_value
+                        }
+
+                        Instr::MakeUnit(dst) => values[*dst] = Value::new_unit(),
+                        Instr::MakeString(dst, literal) => {
+                            values[*dst] = Value::alloc_string(literal, &mut self.space)?
+                        }
+                        Instr::MakeI32(dst, value) => {
+                            values[*dst] = Value::new_int32(*value);
+                        }
+
+                        Instr::Op2(dst, op, a, b) => {
+                            let dst_value = match op {
+                                Op2::Add
+                                | Op2::Sub
+                                | Op2::Eq
+                                | Op2::Ne
+                                | Op2::Mul
+                                | Op2::Div
+                                | Op2::Rem
+                                | Op2::Lt
+                                | Op2::Gt
+                                | Op2::Le
+                                | Op2::Ge => {
+                                    let a = values[*a].load_int32()?;
+                                    let b = values[*b].load_int32()?;
+                                    match op {
+                                        Op2::Add => Value::new_int32(a + b),
+                                        Op2::Sub => Value::new_int32(a - b),
+                                        Op2::Eq => Value::new_bool(a == b),
+                                        Op2::Ne => Value::new_bool(a != b),
+                                        Op2::Mul => Value::new_int32(a * b),
+                                        Op2::Div => Value::new_int32(a / b),
+                                        Op2::Rem => Value::new_int32(a % b),
+                                        Op2::Lt => Value::new_bool(a < b),
+                                        Op2::Gt => Value::new_bool(a > b),
+                                        Op2::Le => Value::new_bool(a <= b),
+                                        Op2::Ge => Value::new_bool(a >= b),
+                                        // _ => unreachable!(),
+                                    }
+                                }
+                            };
+                            values[*dst] = dst_value
+                        }
+
+                        Instr::Copy(dst, src) => {
+                            let src_value = values[*src];
+                            values[*dst] = src_value
+                        }
+                        Instr::Intrinsic(intrinsic, indexes) => intrinsic(values, indexes, self)?,
+                        Instr::Unreachable(msg) => {
+                            return Err(ExecuteError::Unreachable(msg));
+                        }
                     }
 
-                    Instr::Copy(dst, src) => {
-                        let src_value = values[*src];
-                        values[*dst] = src_value
-                    }
-                    Instr::Intrinsic(intrinsic, indexes) => intrinsic(values, indexes, self)?,
-                    Instr::Unreachable(msg) => {
-                        return Err(ExecuteError::Unreachable(msg));
-                    }
+                    frame.instr_pointer += 1;
                 }
-
-                frame.instr_pointer += 1;
+                unreachable!("block should terminate with Return")
             }
-            unreachable!("block should terminate with Return")
         }
     }
 }
