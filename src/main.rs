@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    Eval::new(registry, asset.into()).run(prog)?;
+    unsafe { Eval::new(registry).run(prog, &asset)? }
     Ok(())
 }
 

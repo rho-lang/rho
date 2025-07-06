@@ -1,6 +1,6 @@
 use crate::{
     asset::{BlockId, StringId},
-    eval::{ExecuteError, Value},
+    eval::ExecuteError,
     typing::RecordLayout,
 };
 
@@ -138,12 +138,15 @@ pub enum Op2 {
 }
 
 pub mod instr {
-    use crate::eval::Eval;
+    use crate::{
+        asset::Asset,
+        eval::{Eval, ValuesView},
+    };
 
     use super::*;
 
-    // currently not seen any intrinsic that need to be `unsafe`
-    pub type Intrinsic = fn(&mut [Value], &[ValueIndex], &mut Eval) -> Result<(), ExecuteError>;
+    pub type Intrinsic =
+        unsafe fn(ValuesView, &[ValueIndex], &mut Eval, &Asset) -> Result<(), ExecuteError>;
 
     #[derive(Debug)]
     pub struct Match {

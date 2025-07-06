@@ -1,4 +1,4 @@
-use std::{mem::take, ptr::copy_nonoverlapping, slice, str, sync::Arc};
+use std::{mem::take, ptr::copy_nonoverlapping, slice, str};
 
 use thiserror::Error;
 
@@ -12,7 +12,6 @@ use crate::{
 pub struct Eval {
     space: Space,
     registry: TypeRegistry,
-    asset: Arc<Asset>,
     task_addr: SpaceAddr,
 }
 
@@ -125,6 +124,50 @@ impl Default for Task {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ValuesView(SpaceAddr);
+
+impl ValuesView {
+    fn offset(self, offset: usize) -> Self {
+        Self(self.0 + offset * size_of::<Value>())
+    }
+
+    unsafe fn load(&self, index: usize, space: &Space) -> Value {
+        *unsafe { space.typed_get(self.0 + index * size_of::<Value>()) }
+    }
+
+    unsafe fn store(&self, index: usize, value: Value, space: &mut Space) {
+        unsafe { space.typed_write(self.0 + index * size_of::<Value>(), value) }
+    }
+}
+
+struct TaskView(SpaceAddr);
+
+impl TaskView {
+    unsafe fn get<'a>(&self, space: &'a Space) -> &'a Task {
+        unsafe { space.typed_get::<Task>(self.0) }
+    }
+
+    unsafe fn get_mut<'a>(&self, space: &'a mut Space) -> &'a mut Task {
+        unsafe { space.typed_get_mut::<Task>(self.0) }
+    }
+
+    unsafe fn frame<'a>(&self, space: &'a Space) -> &'a Frame {
+        let task = unsafe { self.get(space) };
+        &task.frames[task.num_frame - 1]
+    }
+
+    unsafe fn frame_mut<'a>(&self, space: &'a mut Space) -> &'a mut Frame {
+        let task = unsafe { self.get_mut(space) };
+        &mut task.frames[task.num_frame - 1]
+    }
+
+    unsafe fn frame_values(&self, space: &Space) -> ValuesView {
+        let task = unsafe { self.get(space) };
+        ValuesView(task.values_addr).offset(task.frames[task.num_frame - 1].value_offset)
+    }
+}
+
 #[derive(Error, Debug)]
 #[error("arity error: accept {expected} arguments, but got {actual}")]
 pub struct ArityError {
@@ -132,9 +175,9 @@ pub struct ArityError {
     pub actual: usize,
 }
 
-impl Task {
-    fn push_frame(
-        &mut self,
+impl TaskView {
+    unsafe fn push_frame(
+        &self,
         closure: Closure,
         args: &[Value],
         space: &mut Space,
@@ -148,46 +191,51 @@ impl Task {
             })?;
         }
 
-        if self.values_len + block.num_value > self.values_cap {
-            let new_cap = (self.values_len + block.num_value).max(self.values_cap * 2);
-            let new_addr = space.alloc(size_of::<Value>() * new_cap, align_of::<Value>())?;
-            if self.values_len > 0 {
+        let mut task = unsafe { self.get_mut(space) };
+        assert!(
+            task.num_frame < 16,
+            "call stack deeper than 16 frames is not supported"
+        );
+
+        let values_addr = task.values_addr;
+        let values_len = task.values_len;
+        if values_len + block.num_value > task.values_cap {
+            let new_cap = (values_len + block.num_value).max(task.values_cap * 2);
+            let new_values_addr = space.alloc(size_of::<Value>() * new_cap, align_of::<Value>())?;
+            if values_len > 0 {
                 unsafe {
                     copy_nonoverlapping(
-                        space.typed_get::<Value>(self.values_addr),
-                        space.typed_get_mut(new_addr),
-                        self.values_len,
+                        space.typed_get::<Value>(values_addr),
+                        space.typed_get_mut(new_values_addr),
+                        values_len,
                     )
                 }
             }
-            self.values_addr = new_addr;
-            self.values_cap = new_cap;
+            task = unsafe { self.get_mut(space) };
+            task.values_addr = new_values_addr;
+            task.values_cap = new_cap
         }
-        for (i, &arg) in args.iter().enumerate() {
-            unsafe { value_slice_store(space, self.values_addr, self.values_len + i, arg) }
-        }
-
-        assert!(
-            self.num_frame < 16,
-            "call stack deeper than 16 frames is not supported"
-        );
-        self.frames[self.num_frame] = Frame {
+        task.frames[task.num_frame] = Frame {
             closure,
             instr_pointer: 0,
-            value_offset: self.values_len,
+            value_offset: values_len,
         };
-        self.num_frame += 1;
-        self.values_len += block.num_value;
+        task.num_frame += 1;
+        task.values_len += block.num_value;
+
+        let values = unsafe { self.frame_values(space) };
+        for (i, &arg) in args.iter().enumerate() {
+            unsafe { values.store(i, arg, space) }
+        }
         Ok(())
     }
 }
 
 impl Eval {
-    pub fn new(registry: TypeRegistry, asset: Arc<Asset>) -> Self {
+    pub fn new(registry: TypeRegistry) -> Self {
         Self {
             space: Space::new(1 << 20),
             registry,
-            asset,
             task_addr: SpaceAddr::MAX,
         }
     }
@@ -214,12 +262,11 @@ pub enum ExecuteError {
 }
 
 impl Eval {
-    pub fn run(mut self, main: Closure) -> Result<(), ExecuteError> {
-        let mut task = Task::default();
-        task.push_frame(main, &[], &mut self.space, &self.asset)?;
-        let task_value = Value::alloc_task(task, &mut self.space)?;
+    pub unsafe fn run(mut self, main: Closure, asset: &Asset) -> Result<(), ExecuteError> {
+        let task_value = Value::alloc_task(&mut self.space)?;
         self.task_addr = task_value.addr();
-        while let Err(err) = self.run_impl() {
+        unsafe { TaskView(self.task_addr).push_frame(main, &[], &mut self.space, asset)? }
+        while let Err(err) = unsafe { self.run_impl(asset) } {
             if let ExecuteError::Space(OutOfSpace(requested_size)) = err {
                 self.space
                     .copy_collect(OutOfSpace(requested_size), self.task_addr)
@@ -229,70 +276,53 @@ impl Eval {
         }
         Ok(())
     }
-}
 
-impl Eval {
-    fn run_impl(&mut self) -> Result<(), ExecuteError> {
-        let asset = self.asset.clone(); // not very elegant= =
+    unsafe fn run_impl(&mut self, asset: &Asset) -> Result<(), ExecuteError> {
         let mut return_epilogue = None;
         'nonlocal_control: loop {
-            let task = unsafe { self.space.typed_get_mut::<Task>(self.task_addr) };
-            let frame = &mut task.frames[task.num_frame - 1];
-            let block = asset.get_block(frame.closure.block_id);
-            let task_values = unsafe {
-                slice::from_raw_parts_mut(
-                    self.space.typed_get_mut::<Value>(task.values_addr),
-                    task.values_len,
-                )
-            };
-            let values = &mut task_values[frame.value_offset..];
+            let task = TaskView(self.task_addr);
+            let block = asset.get_block(unsafe { task.frame(&self.space) }.closure.block_id);
+            let frame_values = unsafe { task.frame_values(&self.space) };
 
             if let Some(value) = take(&mut return_epilogue) {
-                let &Instr::Call(dst, ..) = &block.instrs[frame.instr_pointer] else {
+                let &Instr::Call(dst, ..) =
+                    &block.instrs[unsafe { task.frame(&self.space) }.instr_pointer]
+                else {
                     unreachable!()
                 };
-                values[dst] = value;
-                frame.instr_pointer += 1 // current Call instruction is done
+                unsafe { frame_values.store(dst, value, &mut self.space) }
+                unsafe { task.frame_mut(&mut self.space) }.instr_pointer += 1 // current Call instruction is done
             }
 
             'local_control: loop {
                 // optimize for sequentially execute instructions
-                for instr in &block.instrs[frame.instr_pointer..] {
+                let mut instr_pointer = unsafe { task.frame(&self.space) }.instr_pointer;
+                for instr in &block.instrs[instr_pointer..] {
                     // invariant: instr = block.instrs[frame.instr_pointer]
                     // at the end of this loop, instr_pointer is incremented to maintain this
                     // invariant. the increment is at the end for re-executing failed instructions
                     // in recoverable cases like OutOfSpace. also, every adjustment of instr_pointer
                     // (for control flow) is followed by a `break` or `continue` of the outer
                     // 'local_control
-                    tracing::trace!(%frame.instr_pointer, %block.name, ?instr, "execute");
+                    tracing::trace!(%instr_pointer, %block.name, ?instr, "execute");
                     match instr {
-                        Instr::Jump(instr_index, cond) => {
-                            if match cond {
-                                None => true,
-                                Some(cond) => {
-                                    let target = values[cond.pattern].load_type_id()?;
-                                    values[cond.scrutinee].type_id() == target
-                                }
-                            } {
-                                frame.instr_pointer = *instr_index;
-                                continue 'local_control;
-                            }
-                        }
-
                         Instr::Call(_, closure, args) => {
-                            let closure_value = values[*closure];
-                            let arg_values =
-                                args.iter().map(|arg| values[*arg]).collect::<Vec<_>>();
-                            task.push_frame(
-                                closure_value.load_closure(&self.space)?,
-                                &arg_values,
-                                &mut self.space,
-                                &self.asset,
-                            )?;
+                            let closure_value = unsafe { frame_values.load(*closure, &self.space) };
+                            let closure = closure_value.load_closure(&self.space)?;
+                            let arg_values = args
+                                .iter()
+                                .map(|arg| unsafe { frame_values.load(*arg, &self.space) })
+                                .collect::<Vec<_>>();
+                            unsafe { task.frame_mut(&mut self.space) }.instr_pointer =
+                                instr_pointer;
+                            unsafe {
+                                task.push_frame(closure, &arg_values, &mut self.space, asset)?
+                            }
                             continue 'nonlocal_control;
                         }
                         Instr::Return(index) => {
-                            let return_value = values[*index];
+                            let return_value = unsafe { frame_values.load(*index, &self.space) };
+                            let task = unsafe { task.get_mut(&mut self.space) };
                             task.values_len -= block.num_value;
                             task.num_frame -= 1;
                             if task.num_frame == 0 {
@@ -305,79 +335,105 @@ impl Eval {
                         }
 
                         Instr::Switch(index) => {
-                            let task_value = values[*index];
+                            let task_value = unsafe { frame_values.load(*index, &self.space) };
                             task_value.ensure_type(TypeId::TASK)?;
                             // after switching back (if any), current Switch instruction is done
-                            frame.instr_pointer += 1;
+                            unsafe { task.frame_mut(&mut self.space) }.instr_pointer =
+                                instr_pointer + 1;
                             self.task_addr = task_value.addr();
                             continue 'nonlocal_control;
+                        }
+
+                        Instr::Jump(instr_index, cond) => {
+                            // not calling Option::map because load_type_id may throw
+                            if match cond {
+                                None => true,
+                                Some(cond) => {
+                                    let target =
+                                        unsafe { frame_values.load(cond.pattern, &self.space) }
+                                            .load_type_id()?;
+                                    unsafe { frame_values.load(cond.scrutinee, &self.space) }
+                                        .type_id()
+                                        == target
+                                }
+                            } {
+                                unsafe { task.frame_mut(&mut self.space) }.instr_pointer =
+                                    *instr_index;
+                                continue 'local_control;
+                            }
                         }
 
                         Instr::MakeClosure(dst, block_id) => {
                             let closure_value =
                                 Value::alloc_closure(Closure::new(*block_id), &mut self.space)?;
-                            values[*dst] = closure_value
+                            unsafe { frame_values.store(*dst, closure_value, &mut self.space) }
                         }
                         Instr::Promote(index) => {
-                            values[*index] = Value::alloc_cell(values[*index], &mut self.space)?
+                            let value = unsafe { frame_values.load(*index, &self.space) };
+                            let cell_value = Value::alloc_cell(value, &mut self.space);
+                            unsafe { frame_values.store(*index, cell_value?, &mut self.space) }
                         }
                         Instr::Capture(dst, source) => {
                             let addr = match source {
                                 CaptureSource::Original(index) => {
-                                    let captured_value = values[*index];
+                                    let captured_value =
+                                        unsafe { frame_values.load(*index, &self.space) };
                                     captured_value.ensure_type(TypeId::CELL).unwrap();
                                     captured_value.addr()
                                 }
-                                CaptureSource::Transitive(index) => frame.closure.captured[*index],
+                                CaptureSource::Transitive(index) => {
+                                    unsafe { task.frame(&self.space) }.closure.captured[*index]
+                                }
                             };
-                            values[*dst]
+                            unsafe { frame_values.load(*dst, &self.space) }
                                 .get_closure_mut(&mut self.space)
                                 .unwrap()
                                 .capture(addr)
                         }
                         // the 0 position corresponds to Ref layout
                         Instr::GetCaptured(dst, captured_index) => {
-                            values[*dst] = unsafe {
-                                value_slice_load(
-                                    &self.space,
-                                    frame.closure.captured[*captured_index],
-                                    0,
-                                )
-                            }
+                            let cell = ValuesView(
+                                unsafe { task.frame(&self.space) }.closure.captured
+                                    [*captured_index],
+                            );
+                            let value = unsafe { cell.load(0, &self.space) };
+                            unsafe { frame_values.store(*dst, value, &mut self.space) }
                         }
-                        Instr::SetCaptured(captured_index, index) => unsafe {
-                            value_slice_store(
-                                &mut self.space,
-                                frame.closure.captured[*captured_index],
-                                0,
-                                values[*index],
-                            )
-                        },
+                        Instr::SetCaptured(captured_index, index) => {
+                            let value = unsafe { frame_values.load(*index, &self.space) };
+                            let cell = ValuesView(
+                                unsafe { task.frame(&self.space) }.closure.captured
+                                    [*captured_index],
+                            );
+                            unsafe { cell.store(0, value, &mut self.space) }
+                        }
                         Instr::Demote(index) => {
-                            let value = values[*index];
-                            value.ensure_type(TypeId::CELL).unwrap();
-                            values[*index] =
-                                unsafe { value_slice_load(&self.space, value.addr(), 0) }
+                            let cell_value = unsafe { frame_values.load(*index, &self.space) };
+                            cell_value.ensure_type(TypeId::CELL).unwrap();
+                            let value =
+                                unsafe { ValuesView(cell_value.addr()).load(0, &self.space) };
+                            unsafe { frame_values.store(*index, value, &mut self.space) }
                         }
-                        Instr::SetPromoted(dst, src) => {
-                            let dst_value = values[*dst];
+                        Instr::SetPromoted(dst, index) => {
+                            let value = unsafe { frame_values.load(*index, &self.space) };
+                            let dst_value = unsafe { frame_values.load(*dst, &mut self.space) };
                             dst_value.ensure_type(TypeId::CELL).unwrap();
-                            unsafe {
-                                value_slice_store(
-                                    &mut self.space,
-                                    dst_value.addr(),
-                                    0,
-                                    values[*src],
-                                )
-                            }
+                            unsafe { ValuesView(dst_value.addr()).store(0, value, &mut self.space) }
                         }
 
                         Instr::MakeRecordType(dst, layout) => {
                             let type_id = self.registry.add_record_type(layout.clone());
-                            values[*dst] = Value::new_type_id(type_id)
+                            unsafe {
+                                frame_values.store(
+                                    *dst,
+                                    Value::new_type_id(type_id),
+                                    &mut self.space,
+                                )
+                            }
                         }
                         Instr::MakeRecord(dst, type_id, attrs) => {
-                            let type_id = values[*type_id].load_type_id()?;
+                            let type_id = unsafe { frame_values.load(*type_id, &self.space) }
+                                .load_type_id()?;
                             let Some(RecordLayout(layout)) =
                                 self.registry.get_record_layout(type_id)
                             else {
@@ -389,19 +445,21 @@ impl Eval {
                                     layout.iter().position(|layout_attr| layout_attr == attr)
                                 else {
                                     return Err(ExecuteError::UnexpectedAttr(
-                                        self.asset.get_string(*attr).into(),
+                                        asset.get_string(*attr).into(),
                                     ));
                                 };
-                                record_attrs[pos] = values[*index];
+                                record_attrs[pos] =
+                                    unsafe { frame_values.load(*index, &self.space) };
                             }
                             if attrs.len() != layout.len() {
                                 return Err(ExecuteError::MissingAttr);
                             }
-                            values[*dst] =
-                                Value::alloc_record(type_id, record_attrs, &mut self.space)?
+                            let record_value =
+                                Value::alloc_record(type_id, record_attrs, &mut self.space)?;
+                            unsafe { frame_values.store(*dst, record_value, &mut self.space) }
                         }
                         Instr::GetAttr(dst, record, attr) => {
-                            let record_value = &values[*record];
+                            let record_value = unsafe { frame_values.load(*record, &self.space) };
                             let Some(RecordLayout(layout)) =
                                 self.registry.get_record_layout(record_value.type_id())
                             else {
@@ -411,14 +469,15 @@ impl Eval {
                                 layout.iter().position(|layout_attr| layout_attr == attr)
                             else {
                                 return Err(ExecuteError::UnexpectedAttr(
-                                    self.asset.get_string(*attr).into(),
+                                    asset.get_string(*attr).into(),
                                 ));
                             };
-                            values[*dst] =
-                                unsafe { value_slice_load(&self.space, record_value.addr(), pos) }
+                            let value =
+                                unsafe { ValuesView(record_value.addr()).load(pos, &self.space) };
+                            unsafe { frame_values.store(*dst, value, &mut self.space) }
                         }
                         Instr::SetAttr(record, attr, index) => {
-                            let record_value = &values[*record];
+                            let record_value = unsafe { frame_values.load(*record, &self.space) };
                             let Some(RecordLayout(layout)) =
                                 self.registry.get_record_layout(record_value.type_id())
                             else {
@@ -428,26 +487,25 @@ impl Eval {
                                 layout.iter().position(|layout_attr| layout_attr == attr)
                             else {
                                 return Err(ExecuteError::UnexpectedAttr(
-                                    self.asset.get_string(*attr).into(),
+                                    asset.get_string(*attr).into(),
                                 ));
                             };
+                            let value = unsafe { frame_values.load(*index, &self.space) };
                             unsafe {
-                                value_slice_store(
-                                    &mut self.space,
-                                    record_value.addr(),
-                                    pos,
-                                    values[*index],
-                                )
+                                ValuesView(record_value.addr()).store(pos, value, &mut self.space)
                             }
                         }
 
-                        Instr::MakeUnit(dst) => values[*dst] = Value::new_unit(),
+                        Instr::MakeUnit(dst) => unsafe {
+                            frame_values.store(*dst, Value::new_unit(), &mut self.space)
+                        },
                         Instr::MakeString(dst, literal) => {
-                            values[*dst] = Value::alloc_string(literal, &mut self.space)?
+                            let string_value = Value::alloc_string(literal, &mut self.space)?;
+                            unsafe { frame_values.store(*dst, string_value, &mut self.space) }
                         }
-                        Instr::MakeI32(dst, value) => {
-                            values[*dst] = Value::new_int32(*value);
-                        }
+                        Instr::MakeI32(dst, value) => unsafe {
+                            frame_values.store(*dst, Value::new_int32(*value), &mut self.space)
+                        },
 
                         Instr::Op2(dst, op, a, b) => {
                             let dst_value = match op {
@@ -462,8 +520,10 @@ impl Eval {
                                 | Op2::Gt
                                 | Op2::Le
                                 | Op2::Ge => {
-                                    let a = values[*a].load_int32()?;
-                                    let b = values[*b].load_int32()?;
+                                    let a = unsafe { frame_values.load(*a, &self.space) }
+                                        .load_int32()?;
+                                    let b = unsafe { frame_values.load(*b, &self.space) }
+                                        .load_int32()?;
                                     match op {
                                         Op2::Add => Value::new_int32(a + b),
                                         Op2::Sub => Value::new_int32(a - b),
@@ -480,33 +540,27 @@ impl Eval {
                                     }
                                 }
                             };
-                            values[*dst] = dst_value
+                            unsafe { frame_values.store(*dst, dst_value, &mut self.space) }
                         }
 
                         Instr::Copy(dst, src) => {
-                            let src_value = values[*src];
-                            values[*dst] = src_value
+                            let src_value = unsafe { frame_values.load(*src, &self.space) };
+                            unsafe { frame_values.store(*dst, src_value, &mut self.space) }
                         }
-                        Instr::Intrinsic(intrinsic, indexes) => intrinsic(values, indexes, self)?,
+                        Instr::Intrinsic(intrinsic, indexes) => {
+                            unsafe { intrinsic(frame_values, indexes, self, asset) }?
+                        }
                         Instr::Unreachable(msg) => {
                             return Err(ExecuteError::Unreachable(msg));
                         }
                     }
 
-                    frame.instr_pointer += 1;
+                    instr_pointer += 1
                 }
                 unreachable!("block should terminate with Return")
             }
         }
     }
-}
-
-unsafe fn value_slice_load(space: &Space, addr: SpaceAddr, pos: usize) -> Value {
-    *unsafe { space.typed_get(addr + pos * size_of::<Value>()) }
-}
-
-unsafe fn value_slice_store(space: &mut Space, addr: SpaceAddr, pos: usize, value: Value) {
-    unsafe { space.typed_write(addr + pos * size_of::<Value>(), value) }
 }
 
 #[derive(Error, Debug)]
@@ -584,9 +638,9 @@ impl Value {
     }
     // access to cell is performed directly with SpaceAddr, not going through Value
 
-    fn alloc_task(task: Task, space: &mut Space) -> Result<Value, OutOfSpace> {
+    fn alloc_task(space: &mut Space) -> Result<Value, OutOfSpace> {
         let addr = space.typed_alloc::<Task>()?;
-        unsafe { space.typed_write(addr, task) }
+        unsafe { space.typed_write(addr, Task::default()) }
         Ok(Value::new(TypeId::TASK, addr))
     }
 
@@ -658,7 +712,7 @@ pub mod intrinsics {
     use crate::{
         asset::Asset,
         code::{ValueIndex, instr::Intrinsic},
-        eval::{Eval, ExecuteError, Task, TypeError, Value, value_slice_load, value_slice_store},
+        eval::{Eval, ExecuteError, TaskView, TypeError, Value, ValuesView},
         space::{OutOfSpace, Space, SpaceAddr},
         typing::{RecordLayout, TypeId, TypeRegistry},
     };
@@ -690,19 +744,21 @@ pub mod intrinsics {
         ParseDuration(#[from] humantime::DurationError),
     }
 
-    fn task_new(
-        values: &mut [Value],
+    unsafe fn task_new(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        asset: &Asset,
     ) -> Result<(), ExecuteError> {
-        let closure = values[indexes[1]].load_closure(&context.space)?;
-        let mut task = Task::default();
-        task.push_frame(closure, &[], &mut context.space, &context.asset)?;
-        values[indexes[0]] = Value::alloc_task(task, &mut context.space)?;
+        let closure =
+            unsafe { values.load(indexes[1], &context.space) }.load_closure(&context.space)?;
+        let task_value = Value::alloc_task(&mut context.space)?;
+        unsafe { TaskView(task_value.addr()).push_frame(closure, &[], &mut context.space, asset)? };
+        unsafe { values.store(indexes[0], task_value, &mut context.space) }
         Ok(())
     }
 
-    fn park(_: &mut [Value], _: &[ValueIndex], _: &mut Eval) -> Result<(), ExecuteError> {
+    fn park(_: ValuesView, _: &[ValueIndex], _: &mut Eval, _: &Asset) -> Result<(), ExecuteError> {
         std::thread::park();
         Ok(())
     }
@@ -732,12 +788,13 @@ pub mod intrinsics {
         }
     }
 
-    fn trace(
-        values: &mut [Value],
+    unsafe fn trace(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        asset: &Asset,
     ) -> Result<(), ExecuteError> {
-        let value = values[indexes[0]];
+        let value = unsafe { values.load(indexes[0], &context.space) };
 
         fn format_value(
             value: Value,
@@ -756,7 +813,7 @@ pub mod intrinsics {
                         .iter()
                         .enumerate()
                         .map(|(i, &attr)| {
-                            let attr_value = unsafe { value_slice_load(space, value.addr(), i) };
+                            let attr_value = unsafe { ValuesView(value.addr()).load(i, space) };
                             format!(
                                 "{} = {}",
                                 asset.get_string(attr),
@@ -776,40 +833,52 @@ pub mod intrinsics {
 
         tracing::info!(
             "{}",
-            format_value(
-                value,
-                true,
-                &context.space,
-                &context.registry,
-                &context.asset
-            )
+            format_value(value, true, &context.space, &context.registry, asset)
         );
         Ok(())
     }
 
-    fn type_object(
-        values: &mut [Value],
+    unsafe fn type_object(
+        values: ValuesView,
         indexes: &[ValueIndex],
-        _: &mut Eval,
+        context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let id = values[indexes[1]].load_int32()?;
-        values[indexes[0]] = Value::new_type_id(TypeId(id as _));
+        let id = unsafe { values.load(indexes[1], &context.space) }.load_int32()?;
+        unsafe {
+            values.store(
+                indexes[0],
+                Value::new_type_id(TypeId(id as _)),
+                &mut context.space,
+            )
+        }
         Ok(())
     }
 
     thread_local!(static START: std::time::Instant = std::time::Instant::now());
-    fn time_since_start(
-        values: &mut [Value],
+    unsafe fn time_since_start(
+        values: ValuesView,
         indexes: &[ValueIndex],
-        _: &mut Eval,
+        context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
         let duration = START.with(|start| start.elapsed());
         assert!(
             duration.as_secs() < i32::MAX as _,
             "program has been running for too long"
         );
-        values[indexes[0]] = Value::new_int32(duration.as_secs() as _);
-        values[indexes[1]] = Value::new_int32(duration.subsec_nanos() as _);
+        unsafe {
+            values.store(
+                indexes[0],
+                Value::new_int32(duration.as_secs() as _),
+                &mut context.space,
+            );
+            values.store(
+                indexes[1],
+                Value::new_int32(duration.subsec_nanos() as _),
+                &mut context.space,
+            )
+        }
         Ok(())
     }
 
@@ -843,62 +912,81 @@ pub mod intrinsics {
         }
     }
 
-    fn list_new(
-        values: &mut [Value],
+    unsafe fn list_new(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let cap = values[indexes[1]].load_int32()?;
+        let cap = unsafe { values.load(indexes[1], &context.space) }.load_int32()?;
         if cap < 0 {
             todo!()
         }
-        values[indexes[0]] = Value::alloc_list(cap as _, &mut context.space)?;
+        let list_value = Value::alloc_list(cap as _, &mut context.space)?;
+        unsafe { values.store(indexes[0], list_value, &mut context.space) }
         Ok(())
     }
 
     // list_push is implemented from lang side, with the following intrinsics
-    fn list_len(
-        values: &mut [Value],
+    unsafe fn list_len(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let list = values[indexes[1]].get_list(&context.space)?;
-        values[indexes[0]] = Value::new_int32(list.len as _);
+        let list = unsafe { values.load(indexes[1], &context.space) }.get_list(&context.space)?;
+        unsafe {
+            values.store(
+                indexes[0],
+                Value::new_int32(list.len as _),
+                &mut context.space,
+            )
+        }
         Ok(())
     }
 
-    fn list_set_len(
-        values: &mut [Value],
+    unsafe fn list_set_len(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let list = values[indexes[0]].get_list_mut(&mut context.space)?;
-        let len = values[indexes[1]].load_int32()?;
+        let len = unsafe { values.load(indexes[1], &context.space) }.load_int32()?;
+        let list =
+            unsafe { values.load(indexes[0], &context.space) }.get_list_mut(&mut context.space)?;
         assert!(len >= 0);
         assert!(len as usize <= list.cap);
         list.len = len as _;
         Ok(())
     }
 
-    fn list_cap(
-        values: &mut [Value],
+    unsafe fn list_cap(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let list = values[indexes[1]].get_list(&context.space)?;
-        values[indexes[0]] = Value::new_int32(list.cap as _);
+        let list = unsafe { values.load(indexes[1], &context.space) }.get_list(&context.space)?;
+        unsafe {
+            values.store(
+                indexes[0],
+                Value::new_int32(list.cap as _),
+                &mut context.space,
+            )
+        }
         Ok(())
     }
 
     // while this can be achieved by per-value load + store, expect a performance
     // gap to necessitate
-    fn list_copy(
-        values: &mut [Value],
+    unsafe fn list_copy(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let src = values[indexes[0]].get_list(&context.space)?;
-        let dst = values[indexes[1]].get_list(&context.space)?;
+        let src = unsafe { values.load(indexes[0], &context.space) }.get_list(&context.space)?;
+        let dst = unsafe { values.load(indexes[1], &context.space) }.get_list(&context.space)?;
         let len = src.len;
         assert!(dst.cap >= len);
         let src_buf = src.buf;
@@ -914,43 +1002,47 @@ pub mod intrinsics {
         Ok(())
     }
 
-    fn list_load(
-        values: &mut [Value],
+    unsafe fn list_load(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let list = values[indexes[1]].get_list(&context.space)?;
-        let pos = values[indexes[2]].load_int32()?;
+        let list = unsafe { values.load(indexes[1], &context.space) }.get_list(&context.space)?;
+        let pos = unsafe { values.load(indexes[2], &context.space) }.load_int32()?;
         assert!(pos >= 0);
         assert!((pos as usize) < list.len); // avoid exposing garbage value to lang
-        values[indexes[0]] = unsafe { value_slice_load(&context.space, list.buf, pos as _) };
+        let value = unsafe { ValuesView(list.buf).load(pos as _, &context.space) };
+        unsafe { values.store(indexes[0], value, &mut context.space) }
         Ok(())
     }
 
-    fn list_store(
-        values: &mut [Value],
+    unsafe fn list_store(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let list = values[indexes[0]].get_list(&context.space)?;
-        let pos = values[indexes[1]].load_int32()?;
+        let list = unsafe { values.load(indexes[0], &context.space) }.get_list(&context.space)?;
+        let pos = unsafe { values.load(indexes[1], &context.space) }.load_int32()?;
         assert!(pos >= 0);
         assert!((pos as usize) < list.cap); // as long as not overflowing it is fine
-        let buf = list.buf;
-        unsafe { value_slice_store(&mut context.space, buf, pos as _, values[indexes[2]]) }
+        let value = unsafe { values.load(indexes[2], &context.space) };
+        unsafe { ValuesView(list.buf).store(pos as _, value, &mut context.space) };
         Ok(())
     }
 
     // similar to list_copy but for a performant list_insert and list_remove
-    fn list_copy_within(
-        values: &mut [Value],
+    unsafe fn list_copy_within(
+        values: ValuesView,
         indexes: &[ValueIndex],
         context: &mut Eval,
+        _: &Asset,
     ) -> Result<(), ExecuteError> {
-        let list = values[indexes[0]].get_list(&context.space)?;
-        let src = values[indexes[1]].load_int32()?;
-        let len = values[indexes[2]].load_int32()?;
-        let dst = values[indexes[3]].load_int32()?;
+        let list = unsafe { values.load(indexes[0], &context.space) }.get_list(&context.space)?;
+        let src = unsafe { values.load(indexes[1], &context.space) }.load_int32()?;
+        let len = unsafe { values.load(indexes[2], &context.space) }.load_int32()?;
+        let dst = unsafe { values.load(indexes[3], &context.space) }.load_int32()?;
         assert!(src >= 0);
         assert!(dst >= 0);
         assert!(len > 0);
