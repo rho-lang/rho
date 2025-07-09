@@ -1,4 +1,4 @@
-use std::{alloc::Layout, mem::take, str};
+use std::{alloc::Layout, mem::take, ptr::copy_nonoverlapping, slice, str};
 
 use thiserror::Error;
 
@@ -147,50 +147,6 @@ impl Default for Task {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ValuesView(SpaceAddr);
-
-impl ValuesView {
-    unsafe fn offset(self, offset: usize) -> Self {
-        Self(unsafe { self.0.add(offset * size_of::<Value>()) })
-    }
-
-    unsafe fn load(&self, index: usize, space: &Space) -> Value {
-        *unsafe { space.typed_get(self.0.add(index * size_of::<Value>())) }
-    }
-
-    unsafe fn store(&self, index: usize, value: Value, space: &mut Space) {
-        unsafe { space.typed_write(self.0.add(index * size_of::<Value>()), value) }
-    }
-}
-
-struct TaskView(SpaceAddr);
-
-impl TaskView {
-    unsafe fn get<'a>(&self, space: &'a Space) -> &'a Task {
-        unsafe { space.typed_get::<Task>(self.0) }
-    }
-
-    unsafe fn get_mut<'a>(&self, space: &'a mut Space) -> &'a mut Task {
-        unsafe { space.typed_get_mut::<Task>(self.0) }
-    }
-
-    unsafe fn frame<'a>(&self, space: &'a Space) -> &'a Frame {
-        let task = unsafe { self.get(space) };
-        &task.frames[task.num_frame - 1]
-    }
-
-    unsafe fn frame_mut<'a>(&self, space: &'a mut Space) -> &'a mut Frame {
-        let task = unsafe { self.get_mut(space) };
-        &mut task.frames[task.num_frame - 1]
-    }
-
-    unsafe fn frame_values(&self, space: &Space) -> ValuesView {
-        let task = unsafe { self.get(space) };
-        unsafe { ValuesView(task.values_addr).offset(task.frames[task.num_frame - 1].value_offset) }
-    }
-}
-
 #[derive(Error, Debug)]
 #[error("arity error: accept {expected} arguments, but got {actual}")]
 pub struct ArityError {
@@ -198,9 +154,9 @@ pub struct ArityError {
     pub actual: usize,
 }
 
-impl TaskView {
-    unsafe fn push_frame(
-        &self,
+impl Task {
+    fn push_frame(
+        &mut self,
         closure: Closure,
         args: &[Value],
         space: &mut Space,
@@ -214,43 +170,39 @@ impl TaskView {
             })?;
         }
 
-        let mut task = unsafe { self.get_mut(space) };
         assert!(
-            task.num_frame < 16,
+            self.num_frame < 16,
             "call stack deeper than 16 frames is not supported"
         );
 
-        let values_addr = task.values_addr;
-        let values_len = task.values_len;
-        if values_len + block.num_value > task.values_cap {
-            let new_cap = (values_len + block.num_value).max(task.values_cap * 2);
-            // let new_values_addr = space.alloc(Layout::array::<Value>(new_cap).unwrap())?;
-            // if values_len > 0 {
-            //     unsafe {
-            //         copy_nonoverlapping(
-            //             space.typed_get::<Value>(values_addr),
-            //             space.typed_get_mut(new_values_addr),
-            //             values_len,
-            //         )
-            //     }
-            // }
-            let new_values_addr =
-                unsafe { space.alloc_copy::<Value>(new_cap, values_addr, values_len)? };
-            task = unsafe { self.get_mut(space) };
-            task.values_addr = new_values_addr;
-            task.values_cap = new_cap
+        if self.values_len + block.num_value > self.values_cap {
+            let new_cap = (self.values_len + block.num_value).max(self.values_cap * 2);
+            let new_values_addr = space.alloc(Layout::array::<Value>(new_cap).unwrap())?;
+            if self.values_len > 0 {
+                unsafe {
+                    copy_nonoverlapping(
+                        self.values_addr.as_ptr(),
+                        new_values_addr.as_ptr(),
+                        self.values_len * size_of::<Value>(),
+                    )
+                }
+            }
+            self.values_addr = new_values_addr;
+            self.values_cap = new_cap;
         }
-        task.frames[task.num_frame] = Frame {
+
+        let value_offset = self.values_len;
+        self.frames[self.num_frame] = Frame {
             closure,
             instr_pointer: 0,
-            value_offset: values_len,
+            value_offset,
         };
-        task.num_frame += 1;
-        task.values_len += block.num_value;
+        self.num_frame += 1;
+        self.values_len += block.num_value;
 
-        let values = unsafe { self.frame_values(space) };
+        let values = self.values_addr.cast::<Value>();
         for (i, &arg) in args.iter().enumerate() {
-            unsafe { values.store(i, arg, space) }
+            unsafe { values.add(value_offset + i).write(arg) }
         }
         Ok(())
     }
@@ -290,7 +242,12 @@ impl Eval {
     pub unsafe fn run(mut self, main: Closure, asset: &Asset) -> Result<(), ExecuteError> {
         let task_value = Value::alloc_task(&mut self.space)?;
         self.task_addr = task_value.addr();
-        unsafe { TaskView(self.task_addr).push_frame(main, &[], &mut self.space, asset)? }
+        unsafe { self.task_addr.cast::<Task>().as_mut() }.push_frame(
+            main,
+            &[],
+            &mut self.space,
+            asset,
+        )?;
         while let Err(err) = unsafe { self.run_impl(asset) } {
             if let ExecuteError::Space(OutOfSpace(requested_size)) = err {
                 self.space
@@ -304,50 +261,50 @@ impl Eval {
 
     unsafe fn run_impl(&mut self, asset: &Asset) -> Result<(), ExecuteError> {
         let mut return_epilogue = None;
+        // modified by inter-task control, i.e., just Switch
+        // too cumbersome to nest one level, just re-assign in Switch branch
+        let mut task = unsafe { self.task_addr.cast::<Task>().as_mut() };
         'nonlocal_control: loop {
-            let task = TaskView(self.task_addr);
-            let block = asset.get_block(unsafe { task.frame(&self.space) }.closure.block_id);
-            let frame_values = unsafe { task.frame_values(&self.space) };
+            // modified by inter-frame control, i.e., Call and Return
+            // notice that task.value_addr may be modified by the push_frame in Call, so we
+            // need to reconstruct the slice from scratch instead of lift to outside
+            let frame = &mut task.frames[task.num_frame - 1];
+            let block = asset.get_block(frame.closure.block_id);
+            let frame_values = unsafe {
+                slice::from_raw_parts_mut(
+                    task.values_addr
+                        .cast::<Value>()
+                        .as_ptr()
+                        .add(frame.value_offset),
+                    block.num_value,
+                )
+            };
 
             if let Some(value) = take(&mut return_epilogue) {
-                let &Instr::Call(dst, ..) =
-                    &block.instrs[unsafe { task.frame(&self.space) }.instr_pointer]
-                else {
+                let &Instr::Call(dst, ..) = &block.instrs[frame.instr_pointer] else {
                     unreachable!()
                 };
-                unsafe { frame_values.store(dst, value, &mut self.space) }
-                unsafe { task.frame_mut(&mut self.space) }.instr_pointer += 1 // current Call instruction is done
+                frame_values[dst] = value;
+                frame.instr_pointer += 1
             }
-
             'local_control: loop {
                 // optimize for sequentially execute instructions
-                let mut instr_pointer = unsafe { task.frame(&self.space) }.instr_pointer;
+                let mut instr_pointer = frame.instr_pointer;
                 for instr in &block.instrs[instr_pointer..] {
-                    // invariant: instr = block.instrs[frame.instr_pointer]
-                    // at the end of this loop, instr_pointer is incremented to maintain this
-                    // invariant. the increment is at the end for re-executing failed instructions
-                    // in recoverable cases like OutOfSpace. also, every adjustment of instr_pointer
-                    // (for control flow) is followed by a `break` or `continue` of the outer
-                    // 'local_control
                     tracing::trace!(%instr_pointer, %block.name, ?instr, "execute");
                     match instr {
                         Instr::Call(_, closure, args) => {
-                            let closure_value = unsafe { frame_values.load(*closure, &self.space) };
-                            let closure = closure_value.load_closure(&self.space)?;
+                            let closure = frame_values[*closure].load_closure()?;
                             let arg_values = args
                                 .iter()
-                                .map(|arg| unsafe { frame_values.load(*arg, &self.space) })
+                                .map(|arg| frame_values[*arg])
                                 .collect::<Vec<_>>();
-                            unsafe { task.frame_mut(&mut self.space) }.instr_pointer =
-                                instr_pointer;
-                            unsafe {
-                                task.push_frame(closure, &arg_values, &mut self.space, asset)?
-                            }
+                            frame.instr_pointer = instr_pointer;
+                            task.push_frame(closure, &arg_values, &mut self.space, asset)?;
                             continue 'nonlocal_control;
                         }
                         Instr::Return(index) => {
-                            let return_value = unsafe { frame_values.load(*index, &self.space) };
-                            let task = unsafe { task.get_mut(&mut self.space) };
+                            let return_value = frame_values[*index];
                             task.values_len -= block.num_value;
                             task.num_frame -= 1;
                             if task.num_frame == 0 {
@@ -360,12 +317,12 @@ impl Eval {
                         }
 
                         Instr::Switch(index) => {
-                            let task_value = unsafe { frame_values.load(*index, &self.space) };
+                            let task_value = frame_values[*index];
                             task_value.ensure_type(TypeId::TASK)?;
                             // after switching back (if any), current Switch instruction is done
-                            unsafe { task.frame_mut(&mut self.space) }.instr_pointer =
-                                instr_pointer + 1;
+                            frame.instr_pointer = instr_pointer + 1;
                             self.task_addr = task_value.addr();
+                            task = unsafe { self.task_addr.cast::<Task>().as_mut() };
                             continue 'nonlocal_control;
                         }
 
@@ -374,91 +331,67 @@ impl Eval {
                             if match cond {
                                 None => true,
                                 Some(cond) => {
-                                    let target =
-                                        unsafe { frame_values.load(cond.pattern, &self.space) }
-                                            .load_type_id()?;
-                                    unsafe { frame_values.load(cond.scrutinee, &self.space) }
-                                        .type_id()
-                                        == target
+                                    let target = frame_values[cond.pattern].load_type_id()?;
+                                    frame_values[cond.scrutinee].type_id() == target
                                 }
                             } {
-                                unsafe { task.frame_mut(&mut self.space) }.instr_pointer =
-                                    *instr_index;
+                                frame.instr_pointer = *instr_index;
                                 continue 'local_control;
                             }
                         }
 
                         Instr::MakeClosure(dst, block_id) => {
-                            let closure_value =
-                                Value::alloc_closure(Closure::new(*block_id), &mut self.space)?;
-                            unsafe { frame_values.store(*dst, closure_value, &mut self.space) }
+                            frame_values[*dst] =
+                                Value::alloc_closure(Closure::new(*block_id), &mut self.space)?
                         }
                         Instr::Promote(index) => {
-                            let value = unsafe { frame_values.load(*index, &self.space) };
-                            let cell_value = Value::alloc_cell(value, &mut self.space);
-                            unsafe { frame_values.store(*index, cell_value?, &mut self.space) }
+                            frame_values[*index] =
+                                Value::alloc_cell(frame_values[*index], &mut self.space)?
                         }
                         Instr::Capture(dst, source) => {
                             let addr = match source {
                                 CaptureSource::Original(index) => {
-                                    let captured_value =
-                                        unsafe { frame_values.load(*index, &self.space) };
+                                    let captured_value = frame_values[*index];
                                     captured_value.ensure_type(TypeId::CELL).unwrap();
                                     captured_value.addr()
                                 }
-                                CaptureSource::Transitive(index) => {
-                                    unsafe { task.frame(&self.space) }.closure.captured[*index]
-                                }
+                                CaptureSource::Transitive(index) => frame.closure.captured[*index],
                             };
-                            unsafe { frame_values.load(*dst, &self.space) }
-                                .get_closure_mut(&mut self.space)
+                            unsafe { frame_values[*dst].get_closure_mut() }
                                 .unwrap()
                                 .capture(addr)
                         }
                         // the 0 position corresponds to Ref layout
                         Instr::GetCaptured(dst, captured_index) => {
-                            let cell = ValuesView(
-                                unsafe { task.frame(&self.space) }.closure.captured
-                                    [*captured_index],
-                            );
-                            let value = unsafe { cell.load(0, &self.space) };
-                            unsafe { frame_values.store(*dst, value, &mut self.space) }
+                            frame_values[*dst] = unsafe {
+                                frame.closure.captured[*captured_index]
+                                    .cast::<Value>()
+                                    .read()
+                            }
                         }
-                        Instr::SetCaptured(captured_index, index) => {
-                            let value = unsafe { frame_values.load(*index, &self.space) };
-                            let cell = ValuesView(
-                                unsafe { task.frame(&self.space) }.closure.captured
-                                    [*captured_index],
-                            );
-                            unsafe { cell.store(0, value, &mut self.space) }
-                        }
+                        Instr::SetCaptured(captured_index, index) => unsafe {
+                            frame.closure.captured[*captured_index]
+                                .cast::<Value>()
+                                .write(frame_values[*index])
+                        },
                         Instr::Demote(index) => {
-                            let cell_value = unsafe { frame_values.load(*index, &self.space) };
+                            let cell_value = frame_values[*index];
                             cell_value.ensure_type(TypeId::CELL).unwrap();
-                            let value =
-                                unsafe { ValuesView(cell_value.addr()).load(0, &self.space) };
-                            unsafe { frame_values.store(*index, value, &mut self.space) }
+                            frame_values[*index] =
+                                unsafe { cell_value.addr().cast::<Value>().read() }
                         }
                         Instr::SetPromoted(dst, index) => {
-                            let value = unsafe { frame_values.load(*index, &self.space) };
-                            let dst_value = unsafe { frame_values.load(*dst, &mut self.space) };
+                            let dst_value = frame_values[*dst];
                             dst_value.ensure_type(TypeId::CELL).unwrap();
-                            unsafe { ValuesView(dst_value.addr()).store(0, value, &mut self.space) }
+                            unsafe { dst_value.addr().cast::<Value>().write(frame_values[*index]) }
                         }
 
                         Instr::MakeRecordType(dst, layout) => {
                             let type_id = self.registry.add_record_type(layout.clone());
-                            unsafe {
-                                frame_values.store(
-                                    *dst,
-                                    Value::new_type_id(type_id),
-                                    &mut self.space,
-                                )
-                            }
+                            frame_values[*dst] = Value::new_type_id(type_id);
                         }
-                        Instr::MakeRecord(dst, type_id, attrs) => {
-                            let type_id = unsafe { frame_values.load(*type_id, &self.space) }
-                                .load_type_id()?;
+                        Instr::MakeRecord(dst, type_id, attr_indexes) => {
+                            let type_id = frame_values[*type_id].load_type_id()?;
                             let Some(RecordLayout(layout)) =
                                 self.registry.get_record_layout(type_id)
                             else {
@@ -466,25 +399,24 @@ impl Eval {
                             };
                             let record_value =
                                 Value::alloc_record(type_id, layout.len(), &mut self.space)?;
-                            let attr_values = ValuesView(record_value.addr());
-                            for (attr, index) in attrs {
+                            let attr_values = record_value.addr().cast::<Value>();
+                            for &(attr, index) in attr_indexes {
                                 let Some(pos) =
-                                    layout.iter().position(|layout_attr| layout_attr == attr)
+                                    layout.iter().position(|&layout_attr| layout_attr == attr)
                                 else {
                                     return Err(ExecuteError::UnexpectedAttr(
-                                        asset.get_string(*attr).into(),
+                                        asset.get_string(attr).into(),
                                     ));
                                 };
-                                let value = unsafe { frame_values.load(*index, &self.space) };
-                                unsafe { attr_values.store(pos, value, &mut self.space) }
+                                unsafe { attr_values.add(pos).write(frame_values[index]) }
                             }
-                            if attrs.len() != layout.len() {
+                            if attr_indexes.len() != layout.len() {
                                 return Err(ExecuteError::MissingAttr);
                             }
-                            unsafe { frame_values.store(*dst, record_value, &mut self.space) }
+                            frame_values[*dst] = record_value
                         }
                         Instr::GetAttr(dst, record, attr) => {
-                            let record_value = unsafe { frame_values.load(*record, &self.space) };
+                            let record_value = frame_values[*record];
                             let Some(RecordLayout(layout)) =
                                 self.registry.get_record_layout(record_value.type_id())
                             else {
@@ -497,12 +429,11 @@ impl Eval {
                                     asset.get_string(*attr).into(),
                                 ));
                             };
-                            let value =
-                                unsafe { ValuesView(record_value.addr()).load(pos, &self.space) };
-                            unsafe { frame_values.store(*dst, value, &mut self.space) }
+                            frame_values[*dst] =
+                                unsafe { record_value.addr().cast::<Value>().add(pos).read() }
                         }
                         Instr::SetAttr(record, attr, index) => {
-                            let record_value = unsafe { frame_values.load(*record, &self.space) };
+                            let record_value = frame_values[*record];
                             let Some(RecordLayout(layout)) =
                                 self.registry.get_record_layout(record_value.type_id())
                             else {
@@ -515,22 +446,20 @@ impl Eval {
                                     asset.get_string(*attr).into(),
                                 ));
                             };
-                            let value = unsafe { frame_values.load(*index, &self.space) };
                             unsafe {
-                                ValuesView(record_value.addr()).store(pos, value, &mut self.space)
+                                record_value
+                                    .addr()
+                                    .cast::<Value>()
+                                    .add(pos)
+                                    .write(frame_values[*index])
                             }
                         }
 
-                        Instr::MakeUnit(dst) => unsafe {
-                            frame_values.store(*dst, Value::new_unit(), &mut self.space)
-                        },
+                        Instr::MakeUnit(dst) => frame_values[*dst] = Value::new_unit(),
                         Instr::MakeString(dst, literal) => {
-                            let string_value = Value::alloc_string(literal, &mut self.space)?;
-                            unsafe { frame_values.store(*dst, string_value, &mut self.space) }
+                            frame_values[*dst] = Value::alloc_string(literal, &mut self.space)?
                         }
-                        Instr::MakeI32(dst, value) => unsafe {
-                            frame_values.store(*dst, Value::new_int32(*value), &mut self.space)
-                        },
+                        Instr::MakeI32(dst, value) => frame_values[*dst] = Value::new_int32(*value),
 
                         Instr::Op2(dst, op, a, b) => {
                             let dst_value = match op {
@@ -545,10 +474,8 @@ impl Eval {
                                 | Op2::Gt
                                 | Op2::Le
                                 | Op2::Ge => {
-                                    let a = unsafe { frame_values.load(*a, &self.space) }
-                                        .load_int32()?;
-                                    let b = unsafe { frame_values.load(*b, &self.space) }
-                                        .load_int32()?;
+                                    let a = frame_values[*a].load_int32()?;
+                                    let b = frame_values[*b].load_int32()?;
                                     match op {
                                         Op2::Add => Value::new_int32(a + b),
                                         Op2::Sub => Value::new_int32(a - b),
@@ -565,13 +492,10 @@ impl Eval {
                                     }
                                 }
                             };
-                            unsafe { frame_values.store(*dst, dst_value, &mut self.space) }
+                            frame_values[*dst] = dst_value
                         }
 
-                        Instr::Copy(dst, src) => {
-                            let src_value = unsafe { frame_values.load(*src, &self.space) };
-                            unsafe { frame_values.store(*dst, src_value, &mut self.space) }
-                        }
+                        Instr::Copy(dst, src) => frame_values[*dst] = frame_values[*src],
                         Instr::Intrinsic(intrinsic, indexes) => {
                             unsafe { intrinsic(frame_values, indexes, self, asset) }?
                         }
@@ -616,17 +540,9 @@ impl Value {
     // load_x       (&self, &Space) -> X?           access heap-allocated type with
     // store_x      (&self, X, &mut Space) -> ()?     value semantic
     // get_x        (&self, &Space) -> &X?          ... with reference-semantic
-    // get_x_mut    (&self, &mut Space) -> &mut X?
-    // every type has either one of `new_x` or `alloc_x`. if both `alloc_x` and
-    // `store_x` are provided, then `alloc_x` is equivalent to wrapping the result
-    // of `space.typed_alloc::<X>()` in a X-typed Value and then `store_x`, but
-    // `alloc_x` is more convenient and saves one unnecessary type check
-    // for read-only types (e.g., Signal), only `load_x` and/or `get_x` may be
-    // provided. for heap-allocated mutable types, which of the four access methods
-    // are provided is based on an on-demand manner and depends on the access
-    // pattern. For example, Closure provides `get_closure_mut` for implementing
-    // Capture and `load_closure` for implementing Call, String provides
-    // `get_string` and `get_string_mut` for implementing intrinsics, etc.
+    // get_x_mut    unsafe (&self, &mut Space) -> &mut X?
+    // TODO document here
+    // the safety of get_x_mut: no concurrent borrow to the identical Value
 
     // TypeId
     fn new_type_id(TypeId(id): TypeId) -> Self {
@@ -641,31 +557,31 @@ impl Value {
     // Closure
     fn alloc_closure(closure: Closure, space: &mut Space) -> Result<Self, OutOfSpace> {
         let addr = space.typed_alloc::<Closure>()?;
-        unsafe { space.typed_write(addr, closure) }
+        unsafe { addr.cast::<Closure>().write(closure) }
         Ok(Self::new(TypeId::CLOSURE, addr))
     }
 
-    fn load_closure(&self, space: &Space) -> Result<Closure, TypeError> {
+    fn load_closure(&self) -> Result<Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(*unsafe { space.typed_get(self.addr()) })
+        Ok(unsafe { self.addr().cast::<Closure>().read() })
     }
 
-    fn get_closure_mut<'a>(&self, space: &'a mut Space) -> Result<&'a mut Closure, TypeError> {
+    unsafe fn get_closure_mut(&self) -> Result<&mut Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
-        Ok(unsafe { space.typed_get_mut(self.addr()) })
+        Ok(unsafe { self.addr().cast::<Closure>().as_mut() })
     }
 
     // cell type, represented with a single SpaceAddr
     fn alloc_cell(value: Value, space: &mut Space) -> Result<Self, OutOfSpace> {
         let addr = space.typed_alloc::<Value>()?;
-        unsafe { space.typed_write(addr, value) }
+        unsafe { addr.cast::<Value>().write(value) }
         Ok(Self::new(TypeId::CELL, addr))
     }
     // access to cell is performed directly with SpaceAddr, not going through Value
 
     fn alloc_task(space: &mut Space) -> Result<Value, OutOfSpace> {
         let addr = space.typed_alloc::<Task>()?;
-        unsafe { space.typed_write(addr, Task::default()) }
+        unsafe { addr.cast::<Task>().write(Default::default()) }
         Ok(Value::new(TypeId::TASK, addr))
     }
 

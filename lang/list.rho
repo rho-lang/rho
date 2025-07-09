@@ -32,7 +32,9 @@ let grow = func(list) {
         case True  => 4  # following Rust practice
         case False => l * 2
     intrinsic list_new[new_native](new_cap)
-    intrinsic list_copy(list.native, new_native)
+    match l == 0 case True => {} case False => {
+        intrinsic list_copy(list.native, new_native)
+    }
     list mut.native = new_native
 }
 
