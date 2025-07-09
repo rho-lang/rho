@@ -8,8 +8,8 @@ use thiserror::Error;
 
 use crate::{
     asset::Asset,
-    code::{ValueIndex, instr::Intrinsic},
-    eval::{Eval, ExecuteError, Task, TypeError, Value},
+    code::instr::Intrinsic,
+    eval::{Eval, ExecuteError, IntrinsicValues, Task, TypeError, Value},
     space::{OutOfSpace, Space, SpaceAddr},
     typing::{RecordLayout, TypeId, TypeRegistry},
 };
@@ -42,12 +42,11 @@ pub enum Error {
 }
 
 unsafe fn task_new(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     context: &mut Eval,
     asset: &Asset,
 ) -> Result<(), ExecuteError> {
-    let closure = values[indexes[1]].load_closure()?;
+    let closure = values.load(1).load_closure()?;
     let task_value = Value::alloc_task(&mut context.space)?;
     unsafe { task_value.addr().cast::<Task>().as_mut() }.push_frame(
         closure,
@@ -55,11 +54,11 @@ unsafe fn task_new(
         &mut context.space,
         asset,
     )?;
-    values[indexes[0]] = task_value;
+    values.store(0, task_value);
     Ok(())
 }
 
-fn park(_: &mut [Value], _: &[ValueIndex], _: &mut Eval, _: &Asset) -> Result<(), ExecuteError> {
+fn park(_: IntrinsicValues<'_>, _: &mut Eval, _: &Asset) -> Result<(), ExecuteError> {
     std::thread::park();
     Ok(())
 }
@@ -82,7 +81,7 @@ impl Value {
         Ok(Self::new(TypeId::STRING, addr))
     }
 
-    fn get_str<'a>(&self) -> Result<&'a str, TypeError> {
+    fn get_str<'a>(self) -> Result<&'a str, TypeError> {
         self.ensure_type(TypeId::STRING)?;
         let string = unsafe { self.addr().cast::<String>().as_ref() };
         Ok(unsafe {
@@ -92,13 +91,10 @@ impl Value {
 }
 
 unsafe fn trace(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     context: &mut Eval,
     asset: &Asset,
 ) -> Result<(), ExecuteError> {
-    let value = values[indexes[0]];
-
     fn format_value(
         value: Value,
         top: bool,
@@ -131,25 +127,26 @@ unsafe fn trace(
         }
     }
 
-    tracing::info!("{}", format_value(value, true, &context.registry, asset));
+    tracing::info!(
+        "{}",
+        format_value(values.load(0), true, &context.registry, asset)
+    );
     Ok(())
 }
 
 unsafe fn type_object(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let id = values[indexes[1]].load_int32()?;
-    values[indexes[0]] = Value::new_type_id(TypeId(id as _));
+    let id = values.load(1).load_int32()?;
+    values.store(0, Value::new_type_id(TypeId(id as _)));
     Ok(())
 }
 
 thread_local!(static START: std::time::Instant = std::time::Instant::now());
 unsafe fn time_since_start(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
@@ -158,8 +155,8 @@ unsafe fn time_since_start(
         duration.as_secs() < i32::MAX as _,
         "program has been running for too long"
     );
-    values[indexes[0]] = Value::new_int32(duration.as_secs() as _);
-    values[indexes[1]] = Value::new_int32(duration.subsec_nanos() as _);
+    values.store(0, Value::new_int32(duration.as_secs() as _));
+    values.store(1, Value::new_int32(duration.subsec_nanos() as _));
     Ok(())
 }
 
@@ -182,61 +179,57 @@ impl Value {
     }
 
     // it is also ok to have a load_list
-    fn get_list(&self) -> Result<&List, TypeError> {
+    fn get_list<'a>(self) -> Result<&'a List, TypeError> {
         self.ensure_type(TypeId::LIST)?;
         Ok(unsafe { self.addr().cast::<List>().as_ref() })
     }
 
-    unsafe fn get_list_mut(&self) -> Result<&mut List, TypeError> {
+    unsafe fn get_list_mut<'a>(self) -> Result<&'a mut List, TypeError> {
         self.ensure_type(TypeId::LIST)?;
         Ok(unsafe { self.addr().cast::<List>().as_mut() })
     }
 }
 
 unsafe fn list_new(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     context: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let cap = values[indexes[1]].load_int32()?;
+    let cap = values.load(1).load_int32()?;
     assert!(cap >= 0);
     let list_value = Value::alloc_list(cap as _, &mut context.space)?;
-    values[indexes[0]] = list_value;
+    values.store(0, list_value);
     Ok(())
 }
 
 // list_push is implemented from lang side, with the following intrinsics
 unsafe fn list_len(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values[indexes[1]].get_list()?;
-    values[indexes[0]] = Value::new_int32(list.len as _);
+    let list = values.load(1).get_list()?;
+    values.store(0, Value::new_int32(list.len as _));
     Ok(())
 }
 
 unsafe fn list_cap(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values[indexes[1]].get_list()?;
-    values[indexes[0]] = Value::new_int32(list.cap as _);
+    let list = values.load(1).get_list()?;
+    values.store(0, Value::new_int32(list.cap as _));
     Ok(())
 }
 
 unsafe fn list_set_len(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = unsafe { values[indexes[0]].get_list_mut()? };
-    let len = values[indexes[1]].load_int32()?;
+    let list = unsafe { values.load(0).get_list_mut()? };
+    let len = values.load(1).load_int32()?;
     assert!(len >= 0);
     assert!(len as usize <= list.cap);
     list.len = len as _;
@@ -246,13 +239,12 @@ unsafe fn list_set_len(
 // while this can be achieved by per-value load + store, expect a performance
 // gap to necessitate
 unsafe fn list_copy(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let src = values[indexes[0]].get_list()?;
-    let dst = values[indexes[1]].get_list()?;
+    let src = values.load(0).get_list()?;
+    let dst = values.load(1).get_list()?;
     assert_ne!(src.buf, dst.buf);
     let len = src.len;
     assert!(len > 0);
@@ -268,45 +260,42 @@ unsafe fn list_copy(
 }
 
 unsafe fn list_load(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values[indexes[1]].get_list()?;
-    let pos = values[indexes[2]].load_int32()?;
+    let list = values.load(1).get_list()?;
+    let pos = values.load(2).load_int32()?;
     assert!(pos >= 0);
     assert!((pos as usize) < list.len); // avoid exposing garbage value to lang
-    values[indexes[0]] = unsafe { list.buf.cast::<Value>().add(pos as _).read() };
+    values.store(0, unsafe { list.buf.cast::<Value>().add(pos as _).read() });
     Ok(())
 }
 
 unsafe fn list_store(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values[indexes[0]].get_list()?;
-    let pos = values[indexes[1]].load_int32()?;
+    let list = values.load(0).get_list()?;
+    let pos = values.load(1).load_int32()?;
     assert!(pos >= 0);
     assert!((pos as usize) < list.cap); // as long as not overflowing this is fine
-    let value = values[indexes[2]];
+    let value = values.load(2);
     unsafe { list.buf.cast::<Value>().add(pos as _).write(value) }
     Ok(())
 }
 
 // similar to list_copy but for a performant list_insert and list_remove
 unsafe fn list_copy_within(
-    values: &mut [Value],
-    indexes: &[ValueIndex],
+    values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values[indexes[0]].get_list()?;
-    let src = values[indexes[1]].load_int32()?;
-    let len = values[indexes[2]].load_int32()?;
-    let dst = values[indexes[3]].load_int32()?;
+    let list = values.load(0).get_list()?;
+    let src = values.load(1).load_int32()?;
+    let len = values.load(2).load_int32()?;
+    let dst = values.load(3).load_int32()?;
 
     assert!(src >= 0);
     assert!(dst >= 0);

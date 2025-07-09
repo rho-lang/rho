@@ -140,13 +140,13 @@ pub enum Op2 {
 pub mod instr {
     use crate::{
         asset::Asset,
-        eval::{Eval, Value},
+        eval::{Eval, IntrinsicValues},
     };
 
     use super::*;
 
     pub type Intrinsic =
-        unsafe fn(&mut [Value], &[ValueIndex], &mut Eval, &Asset) -> Result<(), ExecuteError>;
+        unsafe fn(IntrinsicValues<'_>, &mut Eval, &Asset) -> Result<(), ExecuteError>;
 
     #[derive(Debug)]
     pub struct Match {
