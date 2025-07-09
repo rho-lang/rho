@@ -288,7 +288,7 @@ impl Eval {
                     tracing::trace!(%instr_pointer, %block.name, ?instr, "execute");
                     match instr {
                         Instr::Call(_, closure, args) => {
-                            let closure = load(*closure).load_closure()?;
+                            let closure = unsafe { load(*closure).load_closure() }?;
                             let arg_values = args.iter().map(|&arg| load(arg)).collect::<Vec<_>>();
                             frame.instr_pointer = instr_pointer;
                             task.push_frame(closure, &arg_values, &mut self.space, asset)?;
@@ -539,21 +539,22 @@ impl Value {
     // helper methods for essential types
     // new_x        (X) -> Self                     construct inline type
     // alloc_x      (X, &mut Space) -> Self?        construct heap-allocated type
-    // load_x       (&self) -> X?                   access inline type
-    // store_x      (&self, X) -> ()?
-    // load_x       (&self, &Space) -> X?           access heap-allocated type with
-    // store_x      (&self, X, &mut Space) -> ()?     value semantic
-    // get_x        (&self, &Space) -> &X?          ... with reference-semantic
-    // get_x_mut    unsafe (&self, &mut Space) -> &mut X?
+    // load_x       (self) -> X?                    access inline type
+    // store_x      (self, X) -> ()?
+    // load_x       unsafe (self) -> X?             access heap-allocated type with
+    // store_x      unsafe (self, X) -> ()?         value semantic
+    // get_x        unsafe (self) -> &X?            ... with reference-semantic
+    // get_x_mut    unsafe (self) -> &mut X?
     // TODO document here
-    // the safety of get_x_mut: no concurrent borrow to the identical Value
+    // safety: concurrent borrows to identical Value must follow mutability rule
+    // actually, probably there should be no concurrent borrow
 
     // TypeId
     fn new_type_id(TypeId(id): TypeId) -> Self {
         Self::new_inline(TypeId::TYPE_ID, id as _)
     }
 
-    fn load_type_id(&self) -> Result<TypeId, TypeError> {
+    fn load_type_id(self) -> Result<TypeId, TypeError> {
         self.ensure_type(TypeId::TYPE_ID)?;
         Ok(TypeId(self.data() as _))
     }
@@ -565,7 +566,7 @@ impl Value {
         Ok(Self::new(TypeId::CLOSURE, addr))
     }
 
-    fn load_closure(&self) -> Result<Closure, TypeError> {
+    unsafe fn load_closure(self) -> Result<Closure, TypeError> {
         self.ensure_type(TypeId::CLOSURE)?;
         Ok(unsafe { self.addr().cast::<Closure>().read() })
     }
@@ -594,7 +595,7 @@ impl Value {
         Self::new_phantom(TypeId::UNIT)
     }
 
-    fn load_unit(&self) -> Result<Unit, TypeError> {
+    fn load_unit(self) -> Result<Unit, TypeError> {
         self.ensure_type(TypeId::UNIT)?;
         Ok(Unit)
     }
@@ -606,7 +607,7 @@ impl Value {
         Self::new_inline(TypeId::INT32, u64::from_ne_bytes(data))
     }
 
-    fn load_int32(&self) -> Result<i32, TypeError> {
+    fn load_int32(self) -> Result<i32, TypeError> {
         self.ensure_type(TypeId::INT32)?;
         let mut value = [0; size_of::<i32>()];
         value.copy_from_slice(&self.data().to_ne_bytes()[..size_of::<i32>()]);

@@ -46,7 +46,7 @@ unsafe fn task_new(
     context: &mut Eval,
     asset: &Asset,
 ) -> Result<(), ExecuteError> {
-    let closure = values.load(1).load_closure()?;
+    let closure = unsafe { values.load(1).load_closure() }?;
     let task_value = Value::alloc_task(&mut context.space)?;
     unsafe { task_value.addr().cast::<Task>().as_mut() }.push_frame(
         closure,
@@ -179,7 +179,7 @@ impl Value {
     }
 
     // it is also ok to have a load_list
-    fn get_list<'a>(self) -> Result<&'a List, TypeError> {
+    unsafe fn get_list<'a>(self) -> Result<&'a List, TypeError> {
         self.ensure_type(TypeId::LIST)?;
         Ok(unsafe { self.addr().cast::<List>().as_ref() })
     }
@@ -208,7 +208,7 @@ unsafe fn list_len(
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values.load(1).get_list()?;
+    let list = unsafe { values.load(1).get_list() }?;
     values.store(0, Value::new_int32(list.len as _));
     Ok(())
 }
@@ -218,7 +218,7 @@ unsafe fn list_cap(
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values.load(1).get_list()?;
+    let list = unsafe { values.load(1).get_list() }?;
     values.store(0, Value::new_int32(list.cap as _));
     Ok(())
 }
@@ -243,8 +243,8 @@ unsafe fn list_copy(
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let src = values.load(0).get_list()?;
-    let dst = values.load(1).get_list()?;
+    let src = unsafe { values.load(0).get_list() }?;
+    let dst = unsafe { values.load(1).get_list() }?;
     assert_ne!(src.buf, dst.buf);
     let len = src.len;
     assert!(len > 0);
@@ -264,7 +264,7 @@ unsafe fn list_load(
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values.load(1).get_list()?;
+    let list = unsafe { values.load(1).get_list() }?;
     let pos = values.load(2).load_int32()?;
     assert!(pos >= 0);
     assert!((pos as usize) < list.len); // avoid exposing garbage value to lang
@@ -277,7 +277,7 @@ unsafe fn list_store(
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values.load(0).get_list()?;
+    let list = unsafe { values.load(0).get_list() }?;
     let pos = values.load(1).load_int32()?;
     assert!(pos >= 0);
     assert!((pos as usize) < list.cap); // as long as not overflowing this is fine
@@ -292,7 +292,7 @@ unsafe fn list_copy_within(
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let list = values.load(0).get_list()?;
+    let list = unsafe { values.load(0).get_list() }?;
     let src = values.load(1).load_int32()?;
     let len = values.load(2).load_int32()?;
     let dst = values.load(3).load_int32()?;
