@@ -1,9 +1,15 @@
 @package lang.typing
 
-# remember to update every time that TypeId constants are changed
-intrinsic type_object[Unit](5)
+let type_of = func(value) {
+    intrinsic type_of[t](value)
+    t
+}
+
+let Unit = type_of({})
 @export Unit
-intrinsic type_object[True](8)
+
+# well... maybe a little bit inside out here
+let True = type_of(0 == 0)
 @export True
-intrinsic type_object[False](9)
+let False = type_of(0 != 0)
 @export False

@@ -29,7 +29,7 @@ pub fn preload(asset: &mut Asset) {
         ("task_new", task_new),
         ("time_since_start", time_since_start),
         ("trace", trace),
-        ("type_object", type_object),
+        ("type_of", type_of),
     ]
     .map(|(s, f)| (s.into(), f))
     .into()
@@ -134,13 +134,12 @@ unsafe fn trace(
     Ok(())
 }
 
-unsafe fn type_object(
+unsafe fn type_of(
     values: IntrinsicValues<'_>,
     _: &mut Eval,
     _: &Asset,
 ) -> Result<(), ExecuteError> {
-    let id = values.load(1).load_int32()?;
-    values.store(0, Value::new_type_id(TypeId(id as _)));
+    values.store(0, Value::new_type_id(values.load(1).type_id()));
     Ok(())
 }
 
